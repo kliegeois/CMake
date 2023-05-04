@@ -1,23 +1,12 @@
-SET (CTEST_PROJECT_NAME "CMake")
-SET (CTEST_NIGHTLY_START_TIME "21:00:00 EDT")
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-MACRO(SET_IF_NOT_SET var val)
-  IF(NOT DEFINED "${var}")
-    SET("${var}" "${val}")
-  ENDIF(NOT DEFINED "${var}")
-ENDMACRO(SET_IF_NOT_SET)
+set(CTEST_PROJECT_NAME "CMake")
+set(CTEST_NIGHTLY_START_TIME "1:00:00 UTC")
 
-SET_IF_NOT_SET(CTEST_DROP_METHOD "http")
-IF(CTEST_DROP_METHOD STREQUAL "http")
-  SET (CTEST_DROP_SITE "public.kitware.com")
-  SET (CTEST_DROP_LOCATION "/cgi-bin/HTTPUploadDartFile.cgi")
-  SET (CTEST_TRIGGER_SITE "http://${CTEST_DROP_SITE}/cgi-bin/Submit-CMake-TestingResults.cgi")
-ENDIF(CTEST_DROP_METHOD STREQUAL "http")
-
-IF(CTEST_DROP_METHOD STREQUAL "xmlrpc")
-  SET (CTEST_DROP_SITE "http://www.na-mic.org:8081")
-  SET (CTEST_DROP_LOCATION "CMake")
-  SET (CTEST_TRIGGER_SITE "not used")
-  SET (COMPRESS_SUBMISSION ON)
-ENDIF(CTEST_DROP_METHOD STREQUAL "xmlrpc")
-
+set(CTEST_DROP_METHOD "http")
+set(CTEST_DROP_SITE "open.cdash.org")
+set(CTEST_DROP_LOCATION "/submit.php?project=CMake")
+set(CTEST_DROP_SITE_CDASH TRUE)
+set(CTEST_CDASH_VERSION "1.6")
+set(CTEST_CDASH_QUERY_VERSION TRUE)

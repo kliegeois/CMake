@@ -1,48 +1,98 @@
-# - Try to find the Cups printing system
-# Once done this will define
-#
-#  CUPS_FOUND - system has Cups
-#  CUPS_INCLUDE_DIR - the Cups include directory
-#  CUPS_LIBRARIES - Libraries needed to use Cups
-#  Set CUPS_REQUIRE_IPP_DELETE_ATTRIBUTE to TRUE if you need a version which 
-#  features this function (i.e. at least 1.1.19)
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-# Copyright (c) 2006, Alexander Neundorf, <neundorf@kde.org>
-#
-# Redistribution and use is allowed according to the terms of the BSD license.
-# For details see the accompanying COPYING-CMAKE-SCRIPTS file.
+#[=======================================================================[.rst:
+FindCups
+--------
 
+Find the Common UNIX Printing System (CUPS).
 
-INCLUDE(CheckLibraryExists)
+Set ``CUPS_REQUIRE_IPP_DELETE_ATTRIBUTE`` to ``TRUE`` if you need a version which
+features this function (i.e. at least ``1.1.19``)
 
-FIND_PATH(CUPS_INCLUDE_DIR cups/cups.h )
+Imported targets
+^^^^^^^^^^^^^^^^
 
-FIND_LIBRARY(CUPS_LIBRARIES NAMES cups )
+This module defines :prop_tgt:`IMPORTED` target ``Cups::Cups``, if Cups has
+been found.
 
-IF (CUPS_INCLUDE_DIR AND CUPS_LIBRARIES)
-   SET(CUPS_FOUND TRUE)
+Result variables
+^^^^^^^^^^^^^^^^
 
-   # ippDeleteAttribute is new in cups-1.1.19 (and used by kdeprint)
-   CHECK_LIBRARY_EXISTS(cups ippDeleteAttribute "" CUPS_HAS_IPP_DELETE_ATTRIBUTE)
-   IF (CUPS_REQUIRE_IPP_DELETE_ATTRIBUTE AND NOT CUPS_HAS_IPP_DELETE_ATTRIBUTE)
-      SET(CUPS_FOUND FALSE)
-   ENDIF (CUPS_REQUIRE_IPP_DELETE_ATTRIBUTE AND NOT CUPS_HAS_IPP_DELETE_ATTRIBUTE)
+This module will set the following variables in your project:
 
-ELSE  (CUPS_INCLUDE_DIR AND CUPS_LIBRARIES)
-   SET(CUPS_FOUND FALSE)
-ENDIF (CUPS_INCLUDE_DIR AND CUPS_LIBRARIES)
+``CUPS_FOUND``
+  true if CUPS headers and libraries were found
+``CUPS_INCLUDE_DIRS``
+  the directory containing the Cups headers
+``CUPS_LIBRARIES``
+  the libraries to link against to use CUPS.
+``CUPS_VERSION_STRING``
+  the version of CUPS found (since CMake 2.8.8)
 
-IF (CUPS_FOUND)
-   IF (NOT Cups_FIND_QUIETLY)
-      MESSAGE(STATUS "Found Cups: ${CUPS_LIBRARIES}")
-   ENDIF (NOT Cups_FIND_QUIETLY)
-ELSE (CUPS_FOUND)
-   SET(CUPS_LIBRARIES )
-   IF (Cups_FIND_REQUIRED)
-      MESSAGE(FATAL_ERROR "Could NOT find Cups")
-   ENDIF (Cups_FIND_REQUIRED)
-ENDIF (CUPS_FOUND)
-  
-  
-MARK_AS_ADVANCED(CUPS_INCLUDE_DIR CUPS_LIBRARIES)
-  
+Cache variables
+^^^^^^^^^^^^^^^
+
+The following cache variables may also be set:
+
+``CUPS_INCLUDE_DIR``
+  the directory containing the Cups headers
+#]=======================================================================]
+
+find_path(CUPS_INCLUDE_DIR cups/cups.h )
+
+find_library(CUPS_LIBRARIES NAMES cups )
+
+if (CUPS_INCLUDE_DIR AND CUPS_LIBRARIES AND CUPS_REQUIRE_IPP_DELETE_ATTRIBUTE)
+    include(${CMAKE_CURRENT_LIST_DIR}/CheckLibraryExists.cmake)
+    include(${CMAKE_CURRENT_LIST_DIR}/CMakePushCheckState.cmake)
+    cmake_push_check_state()
+    set(CMAKE_REQUIRED_QUIET ${Cups_FIND_QUIETLY})
+
+    # ippDeleteAttribute is new in cups-1.1.19 (and used by kdeprint)
+    CHECK_LIBRARY_EXISTS(cups ippDeleteAttribute "" CUPS_HAS_IPP_DELETE_ATTRIBUTE)
+    cmake_pop_check_state()
+endif ()
+
+if (CUPS_INCLUDE_DIR AND EXISTS "${CUPS_INCLUDE_DIR}/cups/cups.h")
+    file(STRINGS "${CUPS_INCLUDE_DIR}/cups/cups.h" cups_version_str
+         REGEX "^#[\t ]*define[\t ]+CUPS_VERSION_(MAJOR|MINOR|PATCH)[\t ]+[0-9]+$")
+
+    unset(CUPS_VERSION_STRING)
+    foreach(VPART MAJOR MINOR PATCH)
+        foreach(VLINE ${cups_version_str})
+            if(VLINE MATCHES "^#[\t ]*define[\t ]+CUPS_VERSION_${VPART}[\t ]+([0-9]+)$")
+                set(CUPS_VERSION_PART "${CMAKE_MATCH_1}")
+                if(CUPS_VERSION_STRING)
+                    string(APPEND CUPS_VERSION_STRING ".${CUPS_VERSION_PART}")
+                else()
+                    set(CUPS_VERSION_STRING "${CUPS_VERSION_PART}")
+                endif()
+            endif()
+        endforeach()
+    endforeach()
+endif ()
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+
+if (CUPS_REQUIRE_IPP_DELETE_ATTRIBUTE)
+    FIND_PACKAGE_HANDLE_STANDARD_ARGS(Cups
+                                      REQUIRED_VARS CUPS_LIBRARIES CUPS_INCLUDE_DIR CUPS_HAS_IPP_DELETE_ATTRIBUTE
+                                      VERSION_VAR CUPS_VERSION_STRING)
+else ()
+    FIND_PACKAGE_HANDLE_STANDARD_ARGS(Cups
+                                      REQUIRED_VARS CUPS_LIBRARIES CUPS_INCLUDE_DIR
+                                      VERSION_VAR CUPS_VERSION_STRING)
+endif ()
+
+mark_as_advanced(CUPS_INCLUDE_DIR CUPS_LIBRARIES)
+
+if (CUPS_FOUND)
+    set(CUPS_INCLUDE_DIRS "${CUPS_INCLUDE_DIR}")
+    if (NOT TARGET Cups::Cups)
+        add_library(Cups::Cups INTERFACE IMPORTED)
+        set_target_properties(Cups::Cups PROPERTIES
+            INTERFACE_LINK_LIBRARIES      "${CUPS_LIBRARIES}"
+            INTERFACE_INCLUDE_DIRECTORIES "${CUPS_INCLUDE_DIR}")
+    endif ()
+endif ()

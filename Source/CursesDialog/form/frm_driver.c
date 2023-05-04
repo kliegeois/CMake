@@ -29,13 +29,7 @@
 /****************************************************************************
  *   Author: Juergen Pfeifer <juergen.pfeifer@gmx.net> 1995,1997            *
  ****************************************************************************/
-#if defined(__hpux)
- #define _XOPEN_SOURCE_EXTENDED
-#endif
 #include "form.priv.h"
-#if defined(__hpux)
- #undef _XOPEN_SOURCE_EXTENDED
-#endif
 
 /* AIX seems to define this */
 #undef lines
@@ -176,7 +170,7 @@ static int FE_Delete_Previous(FORM *);
 #define Address_Of_Current_Position_In_Buffer(form) \
   Address_Of_Current_Position_In_Nth_Buffer(form,0)
 
-/* Logic to decide wether or not a field is actually a field with
+/* Logic to decide whether or not a field is actually a field with
    vertical or horizontal scrolling */
 #define Is_Scroll_Field(field)          \
    (((field)->drows > (field)->rows) || \
@@ -357,8 +351,7 @@ static void Buffer_To_Window(const FIELD  * field, WINDOW * win)
 
   assert(win && field);
 
-  width  = getmaxx(win);
-  height = getmaxy(win);
+  getmaxyx(win, height, width);
 
   for(row=0, pBuffer=field->buf; 
       row < height; 
@@ -390,13 +383,13 @@ static void Window_To_Buffer(WINDOW * win, FIELD  * field)
   int pad;
   int len = 0;
   char *p;
-  int row, height;
+  int row, height, width;
   
   assert(win && field && field->buf );
 
   pad = field->pad;
   p = field->buf;
-  height = getmaxy(win);
+  getmaxyx(win, height, width);
 
   for(row=0; (row < height) && (row < field->drows); row++ )
     {
@@ -871,7 +864,17 @@ static int Display_Or_Erase_Field(FIELD * field, bool bEraseFlag)
       if (field->opts & O_VISIBLE)
         Set_Field_Window_Attributes(field,win);
       else
+        {
+#if defined(__LSB_VERSION__)
+        /* getattrs() would be handy, but it is not part of LSB 4.0 */
+        attr_t fwinAttrs;
+        short  fwinPair;
+        wattr_get(fwin, &fwinAttrs, &fwinPair, 0);
+        wattr_set(win, fwinAttrs, fwinPair, 0);
+#else
         wattrset(win,getattrs(fwin));
+#endif
+        }
       werase(win);
     }
 
@@ -1068,7 +1071,7 @@ _nc_Synchronize_Options(FIELD *field, Field_Options newopts)
 
       if (form->status & _POSTED)
         {
-          if ((form->curpage == field->page))
+          if (form->curpage == field->page)
             {
               if (changed_opts & O_VISIBLE)
                 {
@@ -1673,7 +1676,7 @@ static int VSC_Generic(FORM *form, int lines)
 |   
 |   Description   :  Performs the generic vertical scrolling routines. 
 |                    This has to check for a multi-line field and to set
-|                    the _NEWTOP flag if scrolling really occured.
+|                    the _NEWTOP flag if scrolling really occurred.
 |
 |   Return Values :  Propagated error code from low-level driver calls
 +--------------------------------------------------------------------------*/
@@ -2082,7 +2085,7 @@ static int Insert_String(FORM *form, int row, char *txt, int len)
 |                    the wrapping.
 |
 |   Return Values :  E_OK              - no wrapping required or wrapping
-|                                        was successfull
+|                                        was successful
 |                    E_REQUEST_DENIED  -
 |                    E_SYSTEM_ERROR    - some system error
 +--------------------------------------------------------------------------*/
@@ -2156,7 +2159,7 @@ static int Wrapping_Not_Necessary_Or_Wrapping_Ok(FORM * form)
 |   
 |   Description   :  Generic routine for field editing requests. The driver
 |                    routines are only called for editable fields, the
-|                    _WINDOW_MODIFIED flag is set if editing occured.
+|                    _WINDOW_MODIFIED flag is set if editing occurred.
 |                    This is somewhat special due to the overload semantics
 |                    of the NEW_LINE and DEL_PREV requests.
 |
@@ -3807,7 +3810,7 @@ int set_field_buffer(FIELD * field, int buffer, const char * value)
                            (int)(1 + (vlen-len)/((field->rows+field->nrow)*field->cols))))
             RETURN(E_SYSTEM_ERROR);
 
-          /* in this case we also have to check, wether or not the remaining
+          /* in this case we also have to check, whether or not the remaining
              characters in value are also printable for buffer 0. */
           if (buffer==0)
             {

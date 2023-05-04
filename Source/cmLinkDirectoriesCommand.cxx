@@ -1,37 +1,85 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmLinkDirectoriesCommand.h"
 
-// cmLinkDirectoriesCommand
-bool cmLinkDirectoriesCommand
-::InitialPass(std::vector<std::string> const& args)
-{
- if(args.size() < 1 )
-    {
-    return true;
-    }
+#include <sstream>
 
-  for(std::vector<std::string>::const_iterator i = args.begin();
-      i != args.end(); ++i)
-    {
-    std::string unixPath = *i;
-    cmSystemTools::ConvertToUnixSlashes(unixPath);
-    this->Makefile->AddLinkDirectory(unixPath.c_str());
-    }
+#include "cmAlgorithms.h"
+#include "cmGeneratorExpression.h"
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmPolicies.h"
+#include "cmSystemTools.h"
+
+class cmExecutionStatus;
+
+// cmLinkDirectoriesCommand
+bool cmLinkDirectoriesCommand::InitialPass(
+  std::vector<std::string> const& args, cmExecutionStatus&)
+{
+  if (args.empty()) {
+    return true;
+  }
+
+  bool before = this->Makefile->IsOn("CMAKE_LINK_DIRECTORIES_BEFORE");
+
+  auto i = args.cbegin();
+  if ((*i) == "BEFORE") {
+    before = true;
+    ++i;
+  } else if ((*i) == "AFTER") {
+    before = false;
+    ++i;
+  }
+
+  std::vector<std::string> directories;
+  for (; i != args.cend(); ++i) {
+    this->AddLinkDir(*i, directories);
+  }
+
+  this->Makefile->AddLinkDirectory(cmJoin(directories, ";"), before);
+
   return true;
 }
 
+void cmLinkDirectoriesCommand::AddLinkDir(
+  std::string const& dir, std::vector<std::string>& directories)
+{
+  std::string unixPath = dir;
+  cmSystemTools::ConvertToUnixSlashes(unixPath);
+  if (!cmSystemTools::FileIsFullPath(unixPath) &&
+      !cmGeneratorExpression::StartsWithGeneratorExpression(unixPath)) {
+    bool convertToAbsolute = false;
+    std::ostringstream e;
+    /* clang-format off */
+    e << "This command specifies the relative path\n"
+      << "  " << unixPath << "\n"
+      << "as a link directory.\n";
+    /* clang-format on */
+    switch (this->Makefile->GetPolicyStatus(cmPolicies::CMP0015)) {
+      case cmPolicies::WARN:
+        e << cmPolicies::GetPolicyWarning(cmPolicies::CMP0015);
+        this->Makefile->IssueMessage(MessageType::AUTHOR_WARNING, e.str());
+        break;
+      case cmPolicies::OLD:
+        // OLD behavior does not convert
+        break;
+      case cmPolicies::REQUIRED_IF_USED:
+      case cmPolicies::REQUIRED_ALWAYS:
+        e << cmPolicies::GetRequiredPolicyError(cmPolicies::CMP0015);
+        this->Makefile->IssueMessage(MessageType::FATAL_ERROR, e.str());
+        CM_FALLTHROUGH;
+      case cmPolicies::NEW:
+        // NEW behavior converts
+        convertToAbsolute = true;
+        break;
+    }
+    if (convertToAbsolute) {
+      std::string tmp = this->Makefile->GetCurrentSourceDirectory();
+      tmp += "/";
+      tmp += unixPath;
+      unixPath = tmp;
+    }
+  }
+  directories.push_back(unixPath);
+}

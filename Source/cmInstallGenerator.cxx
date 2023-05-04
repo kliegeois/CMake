@@ -1,201 +1,156 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmInstallGenerator.h"
 
+#include "cmMakefile.h"
 #include "cmSystemTools.h"
-#include "cmTarget.h"
 
-//----------------------------------------------------------------------------
-cmInstallGenerator
-::cmInstallGenerator(const char* destination,
-                     std::vector<std::string> const& configurations,
-                     const char* component):
-  Destination(destination? destination:""),
-  Configurations(configurations),
-  Component(component? component:""),
-  ConfigurationName(0),
-  ConfigurationTypes(0)
+#include <ostream>
+
+cmInstallGenerator::cmInstallGenerator(
+  const char* destination, std::vector<std::string> const& configurations,
+  const char* component, MessageLevel message, bool exclude_from_all)
+  : cmScriptGenerator("CMAKE_INSTALL_CONFIG_NAME", configurations)
+  , Destination(destination ? destination : "")
+  , Component(component ? component : "")
+  , Message(message)
+  , ExcludeFromAll(exclude_from_all)
 {
 }
 
-//----------------------------------------------------------------------------
-cmInstallGenerator
-::~cmInstallGenerator()
+cmInstallGenerator::~cmInstallGenerator() = default;
+
+bool cmInstallGenerator::HaveInstall()
 {
+  return true;
 }
 
-//----------------------------------------------------------------------------
-void
-cmInstallGenerator
-::Generate(std::ostream& os, const char* config,
-           std::vector<std::string> const& configurationTypes)
+void cmInstallGenerator::CheckCMP0082(bool& haveSubdirectoryInstall,
+                                      bool& haveInstallAfterSubdirectory)
 {
-  this->ConfigurationName = config;
-  this->ConfigurationTypes = &configurationTypes;
-  this->GenerateScript(os);
-  this->ConfigurationName = 0;
-  this->ConfigurationTypes = 0;
+  if (haveSubdirectoryInstall) {
+    haveInstallAfterSubdirectory = true;
+  }
 }
 
-//----------------------------------------------------------------------------
-void cmInstallGenerator
-::AddInstallRule(
-                 std::ostream& os,
-                 const char* dest,
-                 int type,
-                 std::vector<std::string> const& files,
-                 bool optional /* = false */,
-                 const char* properties /* = 0 */,
-                 const char* permissions_file /* = 0 */,
-                 const char* permissions_dir /* = 0 */,
-                 const char* rename /* = 0 */,
-                 const char* literal_args /* = 0 */,
-                 cmInstallGeneratorIndent const& indent
-                 )
+void cmInstallGenerator::AddInstallRule(
+  std::ostream& os, std::string const& dest, cmInstallType type,
+  std::vector<std::string> const& files, bool optional /* = false */,
+  const char* permissions_file /* = 0 */,
+  const char* permissions_dir /* = 0 */, const char* rename /* = 0 */,
+  const char* literal_args /* = 0 */, Indent indent)
 {
   // Use the FILE command to install the file.
   std::string stype;
-  switch(type)
-    {
-    case cmTarget::INSTALL_DIRECTORY:stype = "DIRECTORY"; break;
-    case cmTarget::INSTALL_PROGRAMS: stype = "PROGRAM"; break;
-    case cmTarget::EXECUTABLE:       stype = "EXECUTABLE"; break;
-    case cmTarget::STATIC_LIBRARY:   stype = "STATIC_LIBRARY"; break;
-    case cmTarget::SHARED_LIBRARY:   stype = "SHARED_LIBRARY"; break;
-    case cmTarget::MODULE_LIBRARY:   stype = "MODULE"; break;
-    case cmTarget::INSTALL_FILES:
-    default:                         stype = "FILE"; break;
-    }
+  switch (type) {
+    case cmInstallType_DIRECTORY:
+      stype = "DIRECTORY";
+      break;
+    case cmInstallType_PROGRAMS:
+      stype = "PROGRAM";
+      break;
+    case cmInstallType_EXECUTABLE:
+      stype = "EXECUTABLE";
+      break;
+    case cmInstallType_STATIC_LIBRARY:
+      stype = "STATIC_LIBRARY";
+      break;
+    case cmInstallType_SHARED_LIBRARY:
+      stype = "SHARED_LIBRARY";
+      break;
+    case cmInstallType_MODULE_LIBRARY:
+      stype = "MODULE";
+      break;
+    case cmInstallType_FILES:
+      stype = "FILE";
+      break;
+  }
   os << indent;
-  os << "FILE(INSTALL DESTINATION \"" << dest << "\" TYPE " << stype.c_str();
-  if(optional)
-    {
+  if (cmSystemTools::FileIsFullPath(dest)) {
+    os << "list(APPEND CMAKE_ABSOLUTE_DESTINATION_FILES\n";
+    os << indent << " \"";
+    bool firstIteration = true;
+    for (std::string const& file : files) {
+      if (!firstIteration) {
+        os << ";";
+      }
+      os << dest << "/";
+      if (rename && *rename) {
+        os << rename;
+      } else {
+        os << cmSystemTools::GetFilenameName(file);
+      }
+      firstIteration = false;
+    }
+    os << "\")\n";
+    os << indent << "if(CMAKE_WARN_ON_ABSOLUTE_INSTALL_DESTINATION)\n";
+    os << indent << indent << "message(WARNING \"ABSOLUTE path INSTALL "
+       << "DESTINATION : ${CMAKE_ABSOLUTE_DESTINATION_FILES}\")\n";
+    os << indent << "endif()\n";
+
+    os << indent << "if(CMAKE_ERROR_ON_ABSOLUTE_INSTALL_DESTINATION)\n";
+    os << indent << indent << "message(FATAL_ERROR \"ABSOLUTE path INSTALL "
+       << "DESTINATION forbidden (by caller): "
+       << "${CMAKE_ABSOLUTE_DESTINATION_FILES}\")\n";
+    os << indent << "endif()\n";
+  }
+  std::string absDest = this->ConvertToAbsoluteDestination(dest);
+  os << "file(INSTALL DESTINATION \"" << absDest << "\" TYPE " << stype;
+  if (optional) {
     os << " OPTIONAL";
-    }
-  if(properties && *properties)
-    {
-    os << " PROPERTIES" << properties;
-    }
-  if(permissions_file && *permissions_file)
-    {
+  }
+  switch (this->Message) {
+    case MessageDefault:
+      break;
+    case MessageAlways:
+      os << " MESSAGE_ALWAYS";
+      break;
+    case MessageLazy:
+      os << " MESSAGE_LAZY";
+      break;
+    case MessageNever:
+      os << " MESSAGE_NEVER";
+      break;
+  }
+  if (permissions_file && *permissions_file) {
     os << " PERMISSIONS" << permissions_file;
-    }
-  if(permissions_dir && *permissions_dir)
-    {
+  }
+  if (permissions_dir && *permissions_dir) {
     os << " DIR_PERMISSIONS" << permissions_dir;
-    }
-  if(rename && *rename)
-    {
+  }
+  if (rename && *rename) {
     os << " RENAME \"" << rename << "\"";
-    }
+  }
   os << " FILES";
-  if(files.size() == 1)
-    {
+  if (files.size() == 1) {
     os << " \"" << files[0] << "\"";
+  } else {
+    for (std::string const& f : files) {
+      os << "\n" << indent << "  \"" << f << "\"";
     }
-  else
-    {
-    for(std::vector<std::string>::const_iterator fi = files.begin();
-        fi != files.end(); ++fi)
-      {
-      os << "\n" << indent << "  \"" << *fi << "\"";
-      }
     os << "\n" << indent << " ";
-    if(!(literal_args && *literal_args))
-      {
+    if (!(literal_args && *literal_args)) {
       os << " ";
-      }
     }
-  if(literal_args && *literal_args)
-    {
+  }
+  if (literal_args && *literal_args) {
     os << literal_args;
-    }
+  }
   os << ")\n";
 }
 
-//----------------------------------------------------------------------------
-static void cmInstallGeneratorEncodeConfig(const char* config,
-                                           std::string& result)
+std::string cmInstallGenerator::CreateComponentTest(const char* component,
+                                                    bool exclude_from_all)
 {
-  for(const char* c = config; *c; ++c)
-    {
-    if(*c >= 'a' && *c <= 'z')
-      {
-      result += "[";
-      result += *c + ('A' - 'a');
-      result += *c;
-      result += "]";
-      }
-    else if(*c >= 'A' && *c <= 'Z')
-      {
-      result += "[";
-      result += *c;
-      result += *c + ('a' - 'A');
-      result += "]";
-      }
-    else
-      {
-      result += *c;
-      }
-    }
-}
-
-//----------------------------------------------------------------------------
-std::string
-cmInstallGenerator::CreateConfigTest(const char* config)
-{
-  std::string result = "\"${CMAKE_INSTALL_CONFIG_NAME}\" MATCHES \"^(";
-  if(config && *config)
-    {
-    cmInstallGeneratorEncodeConfig(config, result);
-    }
-  result += ")$\"";
-  return result;
-}
-
-//----------------------------------------------------------------------------
-std::string
-cmInstallGenerator::CreateConfigTest(std::vector<std::string> const& configs)
-{
-  std::string result = "\"${CMAKE_INSTALL_CONFIG_NAME}\" MATCHES \"^(";
-  const char* sep = "";
-  for(std::vector<std::string>::const_iterator ci = configs.begin();
-      ci != configs.end(); ++ci)
-    {
-    result += sep;
-    sep = "|";
-    cmInstallGeneratorEncodeConfig(ci->c_str(), result);
-    }
-  result += ")$\"";
-  return result;
-}
-
-//----------------------------------------------------------------------------
-std::string
-cmInstallGenerator::CreateComponentTest(const char* component)
-{
-  std::string result = "NOT CMAKE_INSTALL_COMPONENT OR "
-    "\"${CMAKE_INSTALL_COMPONENT}\" MATCHES \"^(";
+  std::string result = R"("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "x)";
   result += component;
-  result += ")$\"";
+  result += "x\"";
+  if (!exclude_from_all) {
+    result += " OR NOT CMAKE_INSTALL_COMPONENT";
+  }
   return result;
 }
 
-//----------------------------------------------------------------------------
 void cmInstallGenerator::GenerateScript(std::ostream& os)
 {
   // Track indentation.
@@ -203,38 +158,47 @@ void cmInstallGenerator::GenerateScript(std::ostream& os)
 
   // Begin this block of installation.
   std::string component_test =
-    this->CreateComponentTest(this->Component.c_str());
-  os << indent << "IF(" << component_test << ")\n";
+    this->CreateComponentTest(this->Component.c_str(), this->ExcludeFromAll);
+  os << indent << "if(" << component_test << ")\n";
 
   // Generate the script possibly with per-configuration code.
   this->GenerateScriptConfigs(os, indent.Next());
 
   // End this block of installation.
-  os << indent << "ENDIF(" << component_test << ")\n\n";
+  os << indent << "endif()\n\n";
 }
 
-//----------------------------------------------------------------------------
-void
-cmInstallGenerator::GenerateScriptConfigs(std::ostream& os,
-                                          Indent const& indent)
+bool cmInstallGenerator::InstallsForConfig(const std::string& config)
 {
-  if(this->Configurations.empty())
-    {
-    // This rule is for all configurations.
-    this->GenerateScriptActions(os, indent);
-    }
-  else
-    {
-    // Generate a per-configuration block.
-    std::string config_test = this->CreateConfigTest(this->Configurations);
-    os << indent << "IF(" << config_test << ")\n";
-    this->GenerateScriptActions(os, indent.Next());
-    os << indent << "ENDIF(" << config_test << ")\n";
-    }
+  return this->GeneratesForConfig(config);
 }
 
-//----------------------------------------------------------------------------
-void cmInstallGenerator::GenerateScriptActions(std::ostream&, Indent const&)
+std::string cmInstallGenerator::ConvertToAbsoluteDestination(
+  std::string const& dest) const
 {
-  // No actions for this generator.
+  std::string result;
+  if (!dest.empty() && !cmSystemTools::FileIsFullPath(dest)) {
+    result = "${CMAKE_INSTALL_PREFIX}/";
+  }
+  result += dest;
+  return result;
+}
+
+cmInstallGenerator::MessageLevel cmInstallGenerator::SelectMessageLevel(
+  cmMakefile* mf, bool never)
+{
+  if (never) {
+    return MessageNever;
+  }
+  std::string m = mf->GetSafeDefinition("CMAKE_INSTALL_MESSAGE");
+  if (m == "ALWAYS") {
+    return MessageAlways;
+  }
+  if (m == "LAZY") {
+    return MessageLazy;
+  }
+  if (m == "NEVER") {
+    return MessageNever;
+  }
+  return MessageDefault;
 }

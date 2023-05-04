@@ -1,24 +1,9 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmGlobalVisualStudio71Generator_h
 #define cmGlobalVisualStudio71Generator_h
 
 #include "cmGlobalVisualStudio7Generator.h"
-
 
 /** \class cmGlobalVisualStudio71Generator
  * \brief Write a Unix makefiles.
@@ -28,39 +13,30 @@
 class cmGlobalVisualStudio71Generator : public cmGlobalVisualStudio7Generator
 {
 public:
-  cmGlobalVisualStudio71Generator();
-  static cmGlobalGenerator* New() 
-    { return new cmGlobalVisualStudio71Generator; }
-  
-  ///! Get the name for the generator.
-  virtual const char* GetName() const {
-    return cmGlobalVisualStudio71Generator::GetActualName();}
-  static const char* GetActualName() {return "Visual Studio 7 .NET 2003";}
-
-  /** Get the documentation entry for this generator.  */
-  virtual void GetDocumentation(cmDocumentationEntry& entry) const;
-  
-  ///! Create a local generator appropriate to this Global Generator
-  virtual cmLocalGenerator *CreateLocalGenerator();
+  cmGlobalVisualStudio71Generator(cmake* cm,
+                                  const std::string& platformName = "");
 
 protected:
-  virtual void AddPlatformDefinitions(cmMakefile* mf);
-  virtual void WriteSLNFile(std::ostream& fout, 
-                            cmLocalGenerator* root,
-                            std::vector<cmLocalGenerator*>& generators);
-  virtual void WriteSolutionConfigurations(std::ostream& fout);
-  virtual void WriteProject(std::ostream& fout, 
-                            const char* name, const char* path, cmTarget &t);
-  virtual void WriteProjectDepends(std::ostream& fout, 
-                           const char* name, const char* path, cmTarget &t);
-  virtual void WriteProjectConfigurations(std::ostream& fout,
-                                          const char* name,
-                                          bool partOfDefaultBuild);
-  virtual void WriteExternalProject(std::ostream& fout, const char* name,
-                                    const char* path,
-                                    const std::vector<std::string>& depends);
-  virtual void WriteSLNFooter(std::ostream& fout);
-  virtual void WriteSLNHeader(std::ostream& fout);
+  void WriteSLNFile(std::ostream& fout, cmLocalGenerator* root,
+                    std::vector<cmLocalGenerator*>& generators) override;
+  virtual void WriteSolutionConfigurations(
+    std::ostream& fout, std::vector<std::string> const& configs);
+  void WriteProject(std::ostream& fout, const std::string& name,
+                    const char* path, const cmGeneratorTarget* t) override;
+  void WriteProjectDepends(std::ostream& fout, const std::string& name,
+                           const char* path,
+                           cmGeneratorTarget const* t) override;
+  void WriteProjectConfigurations(
+    std::ostream& fout, const std::string& name,
+    cmGeneratorTarget const& target, std::vector<std::string> const& configs,
+    const std::set<std::string>& configsPartOfDefaultBuild,
+    const std::string& platformMapping = "") override;
+  void WriteExternalProject(std::ostream& fout, const std::string& name,
+                            const char* path, const char* typeGuid,
+                            const std::set<BT<std::string>>& depends) override;
+
+  // Folders are not supported by VS 7.1.
+  bool UseFolderProperty() const override { return false; }
 
   std::string ProjectConfigurationSectionName;
 };

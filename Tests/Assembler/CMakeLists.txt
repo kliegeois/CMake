@@ -1,25 +1,40 @@
-project(Assembler)
+cmake_minimum_required (VERSION 2.6)
+project(Assembler C)
+message("CTEST_FULL_OUTPUT ")
+set(CMAKE_VERBOSE_MAKEFILE 1)
 
 set(SRCS)
 
-# if no file has been set as source and we are on linux with an x86 processor try to use the gas/as assembler
-# main-linux-x86-gas.s seems to work for Linux and FreeBSD
-if(NOT SRCS AND CMAKE_SYSTEM_PROCESSOR MATCHES "[ix].?86$")
-  if(CMAKE_SYSTEM MATCHES Linux OR CMAKE_SYSTEM MATCHES FreeBSD)
-    message(STATUS "Trying to enable ASM-ATT for Linux or FreeBSD on x86")
-    enable_language(ASM-ATT OPTIONAL)
-    if(CMAKE_ASM-ATT_COMPILER_WORKS)
-      message(STATUS "Trying to enable ASM-ATT for Linux/x86 - succeeded")
-      # this assembler file was created using gcc -S main.c
-      set(SRCS main-linux-x86-gas.s)
-    endif(CMAKE_ASM-ATT_COMPILER_WORKS)
-  endif(CMAKE_SYSTEM MATCHES Linux OR CMAKE_SYSTEM MATCHES FreeBSD)
-endif(NOT SRCS AND CMAKE_SYSTEM_PROCESSOR MATCHES "[ix].?86$")
+# (at least) the following toolchains can process assembler files directly
+# and also generate assembler files from C:
+if("${CMAKE_GENERATOR}" MATCHES "Makefile|Xcode" AND
+    NOT CMAKE_OSX_ARCHITECTURES)
+  if((CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang|HP|SunPro|XL)$") OR (CMAKE_C_COMPILER_ID STREQUAL "Intel"  AND  UNIX))
+    set(C_FLAGS "${CMAKE_C_FLAGS}")
+    separate_arguments(C_FLAGS)
+    if(CMAKE_OSX_SYSROOT AND CMAKE_C_SYSROOT_FLAG AND NOT ";${C_FLAGS};" MATCHES ";${CMAKE_C_SYSROOT_FLAG};")
+      list(APPEND C_FLAGS ${CMAKE_C_SYSROOT_FLAG} ${CMAKE_OSX_SYSROOT})
+    endif()
+    # Clang on OS X, and perhaps other compilers, do not support -g
+    # for both generating and assembling, so drop it from generating.
+    list(REMOVE_ITEM C_FLAGS -g)
+    set(SRCS main.s)
+    add_custom_command(
+      OUTPUT main.s
+      COMMAND ${CMAKE_C_COMPILER} ${C_FLAGS} -S ${CMAKE_CURRENT_SOURCE_DIR}/main.c -o main.s
+      DEPENDS main.c
+      VERBATIM
+      )
+  endif()
+endif()
 
-if(NOT SRCS)
+
+if(SRCS)
+  set(CMAKE_ASM_FLAGS "${CMAKE_C_FLAGS}")
+  enable_language(ASM OPTIONAL)
+else()
   message(STATUS "No assembler enabled, using C")
   set(SRCS main.c)
-endif(NOT SRCS)
+endif()
 
 add_executable(HelloAsm ${SRCS})
-set_target_properties(HelloAsm PROPERTIES LINKER_LANGUAGE C)

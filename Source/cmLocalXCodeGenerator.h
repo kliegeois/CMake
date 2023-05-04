@@ -1,23 +1,19 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmLocalXCodeGenerator_h
 #define cmLocalXCodeGenerator_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <map>
+#include <string>
+
 #include "cmLocalGenerator.h"
+
+class cmGeneratorTarget;
+class cmGlobalGenerator;
+class cmMakefile;
+class cmSourceFile;
 
 /** \class cmLocalXCodeGenerator
  * \brief Write a local Xcode project
@@ -28,17 +24,21 @@
 class cmLocalXCodeGenerator : public cmLocalGenerator
 {
 public:
-  ///! Set cache only and recurse to false by default.
-  cmLocalXCodeGenerator();
+  //! Set cache only and recurse to false by default.
+  cmLocalXCodeGenerator(cmGlobalGenerator* gg, cmMakefile* mf);
 
-  virtual ~cmLocalXCodeGenerator();
-  void GetTargetObjectFileDirectories(cmTarget* target,
-                                      std::vector<std::string>& 
-                                      dirs);
-  virtual std::string GetTargetDirectory(cmTarget const& target) const;
+  ~cmLocalXCodeGenerator() override;
+  std::string GetTargetDirectory(
+    cmGeneratorTarget const* target) const override;
+  void AppendFlagEscape(std::string& flags,
+                        const std::string& rawFlag) const override;
+  void Generate() override;
+  virtual void GenerateInstallRules();
+  void ComputeObjectFilenames(
+    std::map<cmSourceFile const*, std::string>& mapping,
+    cmGeneratorTarget const* gt = nullptr) override;
+
 private:
-
 };
 
 #endif
-

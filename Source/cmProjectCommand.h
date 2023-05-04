@@ -1,23 +1,16 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmProjectCommand_h
 #define cmProjectCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+
+class cmExecutionStatus;
 
 /** \class cmProjectCommand
  * \brief Specify the name for this build project.
@@ -33,49 +26,18 @@ public:
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmProjectCommand;
-    }
+  cmCommand* Clone() override { return new cmProjectCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-  
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() {return "project";}
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Set a name for the entire project.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  project(projectname [CXX] [C] [Java])\n"
-      "Sets the name of the project.  "
-      "This creates the variables projectname_BINARY_DIR and "
-      "projectname_SOURCE_DIR.  "
-      "Optionally you can specify which languages your project supports.  "
-      "By default all languages are supported.  If you do not have a "
-      "C++ compiler, but want" 
-      " to build a c program with cmake, then use this option.";
-    }
-  
-  cmTypeMacro(cmProjectCommand, cmCommand);
+private:
+  bool IncludeByVariable(const std::string& variable);
+  void TopLevelCMakeVarCondSet(const char* name, const char* value);
 };
-
-
 
 #endif

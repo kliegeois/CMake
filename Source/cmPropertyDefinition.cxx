@@ -1,52 +1,20 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmPropertyDefinition.h"
-#include "cmSystemTools.h"
 
-cmDocumentationEntry cmPropertyDefinition::GetDocumentation() const
-{
-  cmDocumentationEntry e;
-  e.Name = this->Name;
-  e.Brief = this->ShortDescription;
-  e.Full = this->FullDescription;
-  return e;
-}
-
-void cmPropertyDefinition
-::DefineProperty(const char *name, cmProperty::ScopeType scope,
-                 const char *shortDescription,
-                 const char *fullDescription,
-                 const char *sec,
-                 bool chain)
+void cmPropertyDefinition::DefineProperty(const std::string& name,
+                                          cmProperty::ScopeType scope,
+                                          const char* shortDescription,
+                                          const char* fullDescription,
+                                          bool chain)
 {
   this->Name = name;
   this->Scope = scope;
   this->Chained = chain;
-  if (shortDescription)
-    {
+  if (shortDescription) {
     this->ShortDescription = shortDescription;
-    }
-  if (fullDescription)
-    {
+  }
+  if (fullDescription) {
     this->FullDescription = fullDescription;
-    }
-  if (sec)
-    {
-    this->DocumentationSection = sec;
-    }
+  }
 }
-

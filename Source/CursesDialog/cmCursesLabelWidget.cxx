@@ -1,37 +1,23 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCursesLabelWidget.h"
 
-cmCursesLabelWidget::cmCursesLabelWidget(int width, int height, 
-                                         int left, int top,
-                                         const std::string& name) :
-  cmCursesWidget(width, height, left, top)
+#include "cmCursesWidget.h"
+
+cmCursesLabelWidget::cmCursesLabelWidget(int width, int height, int left,
+                                         int top, const std::string& name)
+  : cmCursesWidget(width, height, left, top)
 {
-  field_opts_off(this->Field,  O_EDIT);
-  field_opts_off(this->Field,  O_ACTIVE);
-  field_opts_off(this->Field,  O_STATIC);
-  this->SetValue(name.c_str());
+  field_opts_off(this->Field, O_EDIT);
+  field_opts_off(this->Field, O_ACTIVE);
+  field_opts_off(this->Field, O_STATIC);
+  this->SetValue(name);
 }
 
-cmCursesLabelWidget::~cmCursesLabelWidget()
-{
-}
+cmCursesLabelWidget::~cmCursesLabelWidget() = default;
 
-bool cmCursesLabelWidget::HandleInput(int&, cmCursesMainForm*, WINDOW* )
+bool cmCursesLabelWidget::HandleInput(int& /*key*/, cmCursesMainForm* /*fm*/,
+                                      WINDOW* /*w*/)
 {
   // Static text. No input is handled here.
   return false;

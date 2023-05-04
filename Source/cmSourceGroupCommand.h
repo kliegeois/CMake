@@ -1,23 +1,17 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmSourceGroupCommand_h
 #define cmSourceGroupCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <map>
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+
+class cmExecutionStatus;
 
 /** \class cmSourceGroupCommand
  * \brief Adds a cmSourceGroup to the cmMakefile.
@@ -31,55 +25,34 @@ public:
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmSourceGroupCommand;
-    }
+  cmCommand* Clone() override { return new cmSourceGroupCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-  
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() {return "source_group";}
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Define a grouping for sources in the makefile.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  source_group(name [REGULAR_EXPRESSION regex] "
-      "[FILES src1 src2 ...])\n"
-      "Defines a group into which sources will be placed in project files.  "
-      "This is mainly used to setup file tabs in Visual Studio.  "
-      "Any file whose name is listed or matches the regular expression will "
-      "be placed in this group.  If a file matches multiple groups, the LAST "
-      "group that explicitly lists the file will be favored, if any.  If no "
-      "group explicitly lists the file, the LAST group whose regular "
-      "expression matches the file will be favored.\n"
-      "The name of the group may contain backslashes to specify subgroups:\n"
-      "  source_group(outer\\\\inner ...)\n"
-      "For backwards compatibility, this command is also supports the "
-      "format:\n"
-      "  source_group(name regex)";
-    }
-  
-  cmTypeMacro(cmSourceGroupCommand, cmCommand);
+private:
+  typedef std::map<std::string, std::vector<std::string>> ParsedArguments;
+  typedef std::vector<std::string> ExpectedOptions;
+
+  ExpectedOptions getExpectedOptions() const;
+
+  bool isExpectedOption(const std::string& argument,
+                        const ExpectedOptions& expectedOptions);
+
+  void parseArguments(const std::vector<std::string>& args,
+                      cmSourceGroupCommand::ParsedArguments& parsedArguments);
+
+  bool processTree(ParsedArguments& parsedArguments, std::string& errorMsg);
+
+  bool checkArgumentsPreconditions(const ParsedArguments& parsedArguments,
+                                   std::string& errorMsg) const;
+  bool checkSingleParameterArgumentPreconditions(
+    const std::string& argument, const ParsedArguments& parsedArguments,
+    std::string& errorMsg) const;
 };
-
-
 
 #endif

@@ -1,134 +1,61 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmTest.h"
+
+#include "cmMakefile.h"
+#include "cmProperty.h"
+#include "cmState.h"
 #include "cmSystemTools.h"
 
-#include "cmake.h"
-#include "cmMakefile.h"
-
-cmTest::cmTest() 
+cmTest::cmTest(cmMakefile* mf)
+  : Backtrace(mf->GetBacktrace())
 {
-  this->Makefile = 0;
+  this->Makefile = mf;
+  this->OldStyle = true;
 }
 
-cmTest::~cmTest()
+cmTest::~cmTest() = default;
+
+cmListFileBacktrace const& cmTest::GetBacktrace() const
 {
+  return this->Backtrace;
 }
 
-void cmTest::SetName(const char* name)
+void cmTest::SetName(const std::string& name)
 {
-  if ( !name )
-    {
-    name = "";
-    }
   this->Name = name;
 }
 
-void cmTest::SetCommand(const char* command)
+void cmTest::SetCommand(std::vector<std::string> const& command)
 {
-  if ( !command )
-    {
-    command = "";
-    }
   this->Command = command;
-  cmSystemTools::ConvertToUnixSlashes(this->Command);
 }
 
-void cmTest::SetArguments(const std::vector<cmStdString>& args)
+const char* cmTest::GetProperty(const std::string& prop) const
 {
-  this->Args = args;
-}
-
-const char *cmTest::GetProperty(const char* prop) const
-{
-  bool chain = false;
-  const char *retVal = 
-    this->Properties.GetPropertyValue(prop, cmProperty::TEST, chain);
-  if (chain)
-    {
-    return this->Makefile->GetProperty(prop,cmProperty::TEST);
+  const char* retVal = this->Properties.GetPropertyValue(prop);
+  if (!retVal) {
+    const bool chain =
+      this->Makefile->GetState()->IsPropertyChained(prop, cmProperty::TEST);
+    if (chain) {
+      return this->Makefile->GetProperty(prop, chain);
     }
+  }
   return retVal;
 }
 
-bool cmTest::GetPropertyAsBool(const char* prop) const
+bool cmTest::GetPropertyAsBool(const std::string& prop) const
 {
   return cmSystemTools::IsOn(this->GetProperty(prop));
 }
 
-void cmTest::SetProperty(const char* prop, const char* value)
+void cmTest::SetProperty(const std::string& prop, const char* value)
 {
-  if (!prop)
-    {
-    return;
-    }
-  if (!value)
-    {
-    value = "NOTFOUND";
-    }
-
-  this->Properties.SetProperty(prop, value, cmProperty::TEST);
+  this->Properties.SetProperty(prop, value);
 }
 
-//----------------------------------------------------------------------------
-void cmTest::SetMakefile(cmMakefile* mf)
+void cmTest::AppendProperty(const std::string& prop, const char* value,
+                            bool asString)
 {
-  // Set our makefile.
-  this->Makefile = mf;
-  this->Properties.SetCMakeInstance(mf->GetCMakeInstance());
-}
-
-// define properties
-void cmTest::DefineProperties(cmake *cm)
-{
-  // define properties
-  cm->DefineProperty
-    ("FAIL_REGULAR_EXPRESSION", cmProperty::TEST, 
-     "If the output matches this regular expression tes test will fail.",
-     "If set, if the output matches one of "
-     "specified regular expressions, the test will fail."
-     "For example: PASS_REGULAR_EXPRESSION \"[^a-z]Error;ERROR;Failed\"");
-
-  cm->DefineProperty
-    ("MEASUREMENT", cmProperty::TEST, 
-     "Specify a DART meansurement and value to be reported for a test.",
-     "If set to a name then that name will be reported to DART as a "
-     "named measurement with a value of 1. You may also specify a value "
-     "by setting MEASUREMENT to \"measurement=value\".");
-
-  cm->DefineProperty
-    ("PASS_REGULAR_EXPRESSION", cmProperty::TEST, 
-     "The output must match this regular expression for the test to pass.",
-     "If set, the test output will be checked "
-     "against the specified regular expressions and at least one of the"
-     " regular expressions has to match, otherwise the test will fail.");
-
-  cm->DefineProperty
-    ("TIMEOUT", cmProperty::TEST, 
-     "How many seconds to allow for this test.",
-     "This property if set will limit a test to nto take more than "
-     "the specified number of seconds to run. If it exceeds that the "
-     "test process will be killed and ctest will move to the next test. "
-     "This setting takes precedence over DART_TESTING_TIMEOUT and "
-     "CTEST_TESTING_TIMOUT.");
-
-  cm->DefineProperty
-    ("WILL_FAIL", cmProperty::TEST, 
-     "If set to true, this will invert the pass/fail flag of the test.",
-     "This property can be used for tests that are expected to fail and "
-     "return a non zero return code.");
+  this->Properties.AppendProperty(prop, value, asString);
 }

@@ -1,20 +1,5 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCPackCygwinBinaryGenerator_h
 #define cmCPackCygwinBinaryGenerator_h
 
@@ -32,11 +17,11 @@ public:
    * Construct generator
    */
   cmCPackCygwinBinaryGenerator();
-  virtual ~cmCPackCygwinBinaryGenerator();
+  ~cmCPackCygwinBinaryGenerator() override;
+
 protected:
   virtual int InitializeInternal();
-  int CompressFiles(const char* outFileName, const char* toplevel,
-    const std::vector<std::string>& files);
+  int PackageFiles();
   virtual const char* GetOutputExtension();
   std::string OutputExtension;
 };

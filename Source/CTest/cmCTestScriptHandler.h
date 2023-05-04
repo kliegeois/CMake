@@ -1,32 +1,22 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestScriptHandler_h
 #define cmCTestScriptHandler_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
 
 #include "cmCTestGenericHandler.h"
-#include "cmListFileCache.h"
+#include "cmDuration.h"
 
-class cmMakefile;
-class cmLocalGenerator;
-class cmGlobalGenerator;
-class cmake;
+#include <chrono>
+#include <string>
+#include <vector>
+
+class cmCTest;
 class cmCTestCommand;
+class cmGlobalGenerator;
+class cmMakefile;
+class cmake;
 
 /** \class cmCTestScriptHandler
  * \brief A class that handles ctest -S invocations
@@ -67,28 +57,34 @@ class cmCTestCommand;
 class cmCTestScriptHandler : public cmCTestGenericHandler
 {
 public:
-  cmTypeMacro(cmCTestScriptHandler, cmCTestGenericHandler);
+  typedef cmCTestGenericHandler Superclass;
 
   /**
    * Add a script to run, and if is should run in the current process
    */
-  void AddConfigurationScript(const char *, bool pscope);
+  void AddConfigurationScript(const char*, bool pscope);
 
   /**
    * Run a dashboard using a specified confiuration script
    */
-  int ProcessHandler();
+  int ProcessHandler() override;
 
   /*
    * Run a script
    */
-  static bool RunScript(cmCTest* ctest, const char *script, bool InProcess);
+  static bool RunScript(cmCTest* ctest, cmMakefile* mf, const char* script,
+                        bool InProcess, int* returnValue);
   int RunCurrentScript();
 
   /*
    * Empty Binary Directory
    */
-  static bool EmptyBinaryDirectory(const char *dir);
+  static bool EmptyBinaryDirectory(const char* dir);
+
+  /*
+   * Write an initial CMakeCache.txt from the given contents.
+   */
+  static bool WriteInitialCache(const char* directory, const char* text);
 
   /*
    * Some elapsed time handling functions
@@ -96,20 +92,22 @@ public:
   static void SleepInSeconds(unsigned int secondsToWait);
   void UpdateElapsedTime();
 
-  /** 
+  /**
    * Return the time remaianing that the script is allowed to run in
    * seconds if the user has set the variable CTEST_TIME_LIMIT. If that has
-   * not been set it returns 1e7 seconds
+   * not been set it returns a very large value.
    */
-  double GetRemainingTimeAllowed();
+  cmDuration GetRemainingTimeAllowed();
 
   cmCTestScriptHandler();
-  ~cmCTestScriptHandler();
+  ~cmCTestScriptHandler() override;
 
-  void Initialize();
+  void Initialize() override;
 
   void CreateCMake();
-  void GetCommandDocumentation(std::vector<cmDocumentationEntry>& v) const;
+  cmake* GetCMake() { return this->CMake; }
+
+  void SetRunCurrentScript(bool value);
 
 private:
   // reads in a script
@@ -133,39 +131,44 @@ private:
   int RunConfigurationDashboard();
 
   // Add ctest command
-  void AddCTestCommand(cmCTestCommand* command);
+  void AddCTestCommand(std::string const& name, cmCTestCommand* command);
 
-  std::vector<cmStdString> ConfigurationScripts;
+  // Try to remove the binary directory once
+  static bool TryToRemoveBinaryDirectoryOnce(const std::string& directoryPath);
+
+  std::vector<std::string> ConfigurationScripts;
   std::vector<bool> ScriptProcessScope;
+
+  bool ShouldRunCurrentScript;
 
   bool Backup;
   bool EmptyBinDir;
   bool EmptyBinDirOnce;
 
-  cmStdString SourceDir;
-  cmStdString BinaryDir;
-  cmStdString BackupSourceDir;
-  cmStdString BackupBinaryDir;
-  cmStdString CTestRoot;
-  cmStdString CVSCheckOut;
-  cmStdString CTestCmd;
-  cmStdString UpdateCmd;
-  cmStdString CTestEnv;
-  cmStdString InitCache;
-  cmStdString CMakeCmd;
-  cmStdString CMOutFile;
-  std::vector<cmStdString> ExtraUpdates;
+  std::string SourceDir;
+  std::string BinaryDir;
+  std::string BackupSourceDir;
+  std::string BackupBinaryDir;
+  std::string CTestRoot;
+  std::string CVSCheckOut;
+  std::string CTestCmd;
+  std::string UpdateCmd;
+  std::string CTestEnv;
+  std::string InitialCache;
+  std::string CMakeCmd;
+  std::string CMOutFile;
+  std::vector<std::string> ExtraUpdates;
 
   double MinimumInterval;
   double ContinuousDuration;
 
   // what time in seconds did this script start running
-  double ScriptStartTime;
+  std::chrono::steady_clock::time_point ScriptStartTime;
 
-  cmMakefile *Makefile;
-  cmLocalGenerator *LocalGenerator;
-  cmGlobalGenerator *GlobalGenerator;
-  cmake *CMake;
+  cmMakefile* Makefile;
+  cmMakefile* ParentMakefile;
+  cmGlobalGenerator* GlobalGenerator;
+  cmake* CMake;
 };
 
 #endif

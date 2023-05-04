@@ -1,28 +1,17 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestMemCheckHandler_h
 #define cmCTestMemCheckHandler_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
 
 #include "cmCTestTestHandler.h"
-#include "cmListFileCache.h"
+
+#include <string>
+#include <vector>
 
 class cmMakefile;
+class cmXMLWriter;
 
 /** \class cmCTestMemCheckHandler
  * \brief A class that handles ctest -S invocations
@@ -30,29 +19,42 @@ class cmMakefile;
  */
 class cmCTestMemCheckHandler : public cmCTestTestHandler
 {
-public:
-  cmTypeMacro(cmCTestMemCheckHandler, cmCTestTestHandler);
+  friend class cmCTestRunTest;
 
-  void PopulateCustomVectors(cmMakefile *mf);
-  
+public:
+  typedef cmCTestTestHandler Superclass;
+
+  void PopulateCustomVectors(cmMakefile* mf) override;
+
   cmCTestMemCheckHandler();
 
-  void Initialize();
+  void Initialize() override;
+
+  int GetDefectCount();
+
 protected:
-  virtual int PreProcessHandler();
-  virtual int PostProcessHandler();
-  virtual void GenerateTestCommand(std::vector<const char*>& args);
+  int PreProcessHandler() override;
+  int PostProcessHandler() override;
+  void GenerateTestCommand(std::vector<std::string>& args, int test) override;
 
 private:
-
-  enum { // Memory checkers
+  enum
+  { // Memory checkers
     UNKNOWN = 0,
     VALGRIND,
     PURIFY,
-    BOUNDS_CHECKER
+    BOUNDS_CHECKER,
+    // checkers after here do not use the standard error list
+    ADDRESS_SANITIZER,
+    LEAK_SANITIZER,
+    THREAD_SANITIZER,
+    MEMORY_SANITIZER,
+    UB_SANITIZER
   };
+
 public:
-  enum { // Memory faults
+  enum
+  { // Memory faults
     ABR = 0,
     ABW,
     ABWL,
@@ -77,8 +79,10 @@ public:
     UMR,
     NO_MEMORY_FAULT
   };
+
 private:
-  enum { // Program statuses
+  enum
+  { // Program statuses
     NOT_RUN = 0,
     TIMEOUT,
     SEGFAULT,
@@ -90,47 +94,61 @@ private:
     BAD_COMMAND,
     COMPLETED
   };
-  std::string              BoundsCheckerDPBDFile;
-  std::string              BoundsCheckerXMLFile;
-  std::string              MemoryTester;
-  std::vector<cmStdString> MemoryTesterOptionsParsed;
-  std::string              MemoryTesterOptions;
-  int                      MemoryTesterStyle;
-  std::string              MemoryTesterOutputFile;
-  int                      MemoryTesterGlobalResults[NO_MEMORY_FAULT];
+  std::string BoundsCheckerDPBDFile;
+  std::string BoundsCheckerXMLFile;
+  std::string MemoryTester;
+  std::vector<std::string> MemoryTesterDynamicOptions;
+  std::vector<std::string> MemoryTesterOptions;
+  int MemoryTesterStyle;
+  std::string MemoryTesterOutputFile;
+  std::string MemoryTesterEnvironmentVariable;
+  // these are used to store the types of errors that can show up
+  std::vector<std::string> ResultStrings;
+  std::vector<std::string> ResultStringsLong;
+  std::vector<int> GlobalResults;
+  bool LogWithPID; // does log file add pid
+  int DefectCount;
 
-  ///! Initialize memory checking subsystem.
+  std::vector<int>::size_type FindOrAddWarning(const std::string& warning);
+  // initialize the ResultStrings and ResultStringsLong for
+  // this type of checker
+  void InitializeResultsVectors();
+
+  //! Initialize memory checking subsystem.
   bool InitializeMemoryChecking();
 
   /**
    * Generate the Dart compatible output
    */
-  void GenerateDartOutput(std::ostream& os);
+  void GenerateDartOutput(cmXMLWriter& xml) override;
 
-  std::vector<cmStdString> CustomPreMemCheck;
-  std::vector<cmStdString> CustomPostMemCheck;
+  std::vector<std::string> CustomPreMemCheck;
+  std::vector<std::string> CustomPostMemCheck;
 
   //! Parse Valgrind/Purify/Bounds Checker result out of the output
-  //string. After running, log holds the output and results hold the
-  //different memmory errors.
-  bool ProcessMemCheckOutput(const std::string& str, 
-                             std::string& log, int* results);
-  bool ProcessMemCheckValgrindOutput(const std::string& str, 
-                                     std::string& log, int* results);
-  bool ProcessMemCheckPurifyOutput(const std::string& str, 
-                                   std::string& log, int* results);
-  bool ProcessMemCheckBoundsCheckerOutput(const std::string& str, 
-                                          std::string& log, int* results);
-  /**
-   *  Run one test
-   */
-  virtual void ProcessOneTest(cmCTestTestProperties *props,
-                              std::vector<cmStdString> &passed,
-                              std::vector<cmStdString> &failed,
-                              int count, int tmsize);
-  void PostProcessPurifyTest(cmCTestTestResult& res);
-  void PostProcessBoundsCheckerTest(cmCTestTestResult& res);
+  // string. After running, log holds the output and results hold the
+  // different memory errors.
+  bool ProcessMemCheckOutput(const std::string& str, std::string& log,
+                             std::vector<int>& results);
+  bool ProcessMemCheckValgrindOutput(const std::string& str, std::string& log,
+                                     std::vector<int>& results);
+  bool ProcessMemCheckPurifyOutput(const std::string& str, std::string& log,
+                                   std::vector<int>& results);
+  bool ProcessMemCheckSanitizerOutput(const std::string& str, std::string& log,
+                                      std::vector<int>& results);
+  bool ProcessMemCheckBoundsCheckerOutput(const std::string& str,
+                                          std::string& log,
+                                          std::vector<int>& results);
+
+  void PostProcessTest(cmCTestTestResult& res, int test);
+  void PostProcessBoundsCheckerTest(cmCTestTestResult& res, int test);
+
+  //! append MemoryTesterOutputFile to the test log
+  void AppendMemTesterOutput(cmCTestTestHandler::cmCTestTestResult& res,
+                             std::string const& filename);
+
+  //! generate the output filename for the given test index
+  void TestOutputFileNames(int test, std::vector<std::string>& files);
 };
 
 #endif
-

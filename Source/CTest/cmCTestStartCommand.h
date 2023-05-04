@@ -1,23 +1,18 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestStartCommand_h
 #define cmCTestStartCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmCTestCommand.h"
+
+#include <iosfwd>
+#include <string>
+#include <vector>
+
+class cmCommand;
+class cmExecutionStatus;
 
 /** \class cmCTestStart
  * \brief Run a ctest script
@@ -27,56 +22,42 @@
 class cmCTestStartCommand : public cmCTestCommand
 {
 public:
-
-  cmCTestStartCommand() {}
+  cmCTestStartCommand();
 
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone()
-    {
+  cmCommand* Clone() override
+  {
     cmCTestStartCommand* ni = new cmCTestStartCommand;
     ni->CTest = this->CTest;
     ni->CTestScriptHandler = this->CTestScriptHandler;
+    ni->CreateNewTag = this->CreateNewTag;
+    ni->Quiet = this->Quiet;
     return ni;
-    }
+  }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
   /**
-   * The name of the command as specified in CMakeList.txt.
+   * Will this invocation of ctest_start create a new TAG file?
    */
-  virtual const char* GetName() { return "CTEST_START";}
+  bool ShouldCreateNewTag() { return this->CreateNewTag; }
 
   /**
-   * Succinct documentation.
+   * Should this invocation of ctest_start output non-error messages?
    */
-  virtual const char* GetTerseDocumentation()
-    {
-    return "Starts the testing for a given model";
-    }
+  bool ShouldBeQuiet() { return this->Quiet; }
 
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_START(Model [TRACK <track>] [source [binary]])\n"
-      "Starts the testing for a given model. The command should be called "
-      "after the binary directory is initialized. If the 'source' and "
-      "'binary' directory are not specified, it reads the "
-      "CTEST_SOURCE_DIRECTORY and CTEST_BINARY_DIRECTORY. If the track is "
-      "specified, the submissions will go to the specified track.";
-    }
-
-  cmTypeMacro(cmCTestStartCommand, cmCTestCommand);
-
+private:
+  bool InitialCheckout(std::ostream& ofs, std::string const& sourceDir);
+  bool CreateNewTag;
+  bool Quiet;
 };
-
 
 #endif

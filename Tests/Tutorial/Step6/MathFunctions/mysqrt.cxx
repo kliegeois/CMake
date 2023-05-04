@@ -1,44 +1,33 @@
-#include <stdio.h>
 #include "MathFunctions.h"
 #include "TutorialConfig.h"
+#include <iostream>
 
-// include the generated table
-#include "Table.h"
-
-#include <math.h>
+#include <cmath>
 
 // a hack square root calculation using simple operations
 double mysqrt(double x)
 {
-  if (x <= 0)
-    {
+  if (x <= 0) {
     return 0;
-    }
-  
-  double result;
+  }
 
   // if we have both log and exp then use them
-  double delta;  
-
-  // use the table to help find an initial value
-  result = x;
-  if (x >= 1 && x < 10)
-    {
-    result = sqrtTable[static_cast<int>(x)];
-    }
+#if defined(HAVE_LOG) && defined(HAVE_EXP)
+  double result = exp(log(x) * 0.5);
+  std::cout << "Computing sqrt of " << x << " to be " << result << " using log"
+            << std::endl;
+#else
+  double result = x;
 
   // do ten iterations
-  int i;
-  for (i = 0; i < 10; ++i)
-    {
-    if (result <= 0)
-      {
+  for (int i = 0; i < 10; ++i) {
+    if (result <= 0) {
       result = 0.1;
-      }
-    delta = x - (result*result);
-    result = result + 0.5*delta/result;
-    fprintf(stdout,"Computing sqrt of %g to be %g\n",x,result);
     }
-
+    double delta = x - (result * result);
+    result = result + 0.5 * delta / result;
+    std::cout << "Computing sqrt of " << x << " to be " << result << std::endl;
+  }
+#endif
   return result;
 }

@@ -1,16 +1,28 @@
-# - ADD_FILE_DEPENDENCIES(source_file depend_files...)
-# Adds the given files as dependencies to source_file
-#
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-MACRO(ADD_FILE_DEPENDENCIES _file)
+#[=======================================================================[.rst:
+AddFileDependencies
+-------------------
 
-   GET_SOURCE_FILE_PROPERTY(_deps ${_file} OBJECT_DEPENDS)
-   IF (_deps)
-      SET(_deps ${_deps} ${ARGN})
-   ELSE (_deps)
-      SET(_deps ${ARGN})
-   ENDIF (_deps)
+Add dependencies to a source file.
 
-   SET_SOURCE_FILES_PROPERTIES(${_file} PROPERTIES OBJECT_DEPENDS "${_deps}")
+.. code-block:: cmake
 
-ENDMACRO(ADD_FILE_DEPENDENCIES)
+  ADD_FILE_DEPENDENCIES(<source> <files>)
+
+Adds the given ``<files>`` to the dependencies of file ``<source>``.
+#]=======================================================================]
+
+macro(ADD_FILE_DEPENDENCIES _file)
+
+  get_source_file_property(_deps ${_file} OBJECT_DEPENDS)
+  if (_deps)
+    set(_deps ${_deps} ${ARGN})
+  else ()
+    set(_deps ${ARGN})
+  endif ()
+
+  set_source_files_properties(${_file} PROPERTIES OBJECT_DEPENDS "${_deps}")
+
+endmacro()

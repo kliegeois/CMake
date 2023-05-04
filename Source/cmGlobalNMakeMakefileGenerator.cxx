@@ -1,61 +1,93 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalNMakeMakefileGenerator.h"
+
+#include "cmDocumentationEntry.h"
 #include "cmLocalUnixMakefileGenerator3.h"
 #include "cmMakefile.h"
+#include "cmState.h"
+#include "cmake.h"
 
-cmGlobalNMakeMakefileGenerator::cmGlobalNMakeMakefileGenerator()
+cmGlobalNMakeMakefileGenerator::cmGlobalNMakeMakefileGenerator(cmake* cm)
+  : cmGlobalUnixMakefileGenerator3(cm)
 {
   this->FindMakeProgramFile = "CMakeNMakeFindMake.cmake";
   this->ForceUnixPaths = false;
   this->ToolSupportsColor = true;
   this->UseLinkScript = false;
+  cm->GetState()->SetWindowsShell(true);
+  cm->GetState()->SetNMake(true);
+  this->DefineWindowsNULL = true;
+  this->PassMakeflags = true;
+  this->UnixCD = false;
+  this->MakeSilentFlag = "/nologo";
 }
 
-void cmGlobalNMakeMakefileGenerator
-::EnableLanguage(std::vector<std::string>const& l, 
-                 cmMakefile *mf, 
-                 bool optional)
+void cmGlobalNMakeMakefileGenerator::EnableLanguage(
+  std::vector<std::string> const& l, cmMakefile* mf, bool optional)
 {
-  // pick a default 
+  // pick a default
   mf->AddDefinition("CMAKE_GENERATOR_CC", "cl");
   mf->AddDefinition("CMAKE_GENERATOR_CXX", "cl");
   this->cmGlobalUnixMakefileGenerator3::EnableLanguage(l, mf, optional);
 }
 
-///! Create a local generator appropriate to this Global Generator
-cmLocalGenerator *cmGlobalNMakeMakefileGenerator::CreateLocalGenerator()
+void cmGlobalNMakeMakefileGenerator::GetDocumentation(
+  cmDocumentationEntry& entry)
 {
-  cmLocalUnixMakefileGenerator3* lg = new cmLocalUnixMakefileGenerator3;
-  lg->SetDefineWindowsNULL(true);
-  lg->SetWindowsShell(true);
-  lg->SetMakeSilentFlag("/nologo");
-  lg->SetGlobalGenerator(this);
-  lg->SetIgnoreLibPrefix(true);
-  lg->SetPassMakeflags(true);
-  lg->SetUnixCD(false);
-  return lg;
+  entry.Name = cmGlobalNMakeMakefileGenerator::GetActualName();
+  entry.Brief = "Generates NMake makefiles.";
 }
 
-//----------------------------------------------------------------------------
-void cmGlobalNMakeMakefileGenerator
-::GetDocumentation(cmDocumentationEntry& entry) const
+void cmGlobalNMakeMakefileGenerator::PrintCompilerAdvice(
+  std::ostream& os, std::string const& lang, const char* envVar) const
 {
-  entry.Name = this->GetName();
-  entry.Brief = "Generates NMake makefiles.";
-  entry.Full = "";
+  if (lang == "CXX" || lang == "C") {
+    /* clang-format off */
+    os <<
+      "To use the NMake generator with Visual C++, cmake must be run from a "
+      "shell that can use the compiler cl from the command line. This "
+      "environment is unable to invoke the cl compiler. To fix this problem, "
+      "run cmake from the Visual Studio Command Prompt (vcvarsall.bat).\n";
+    /* clang-format on */
+  }
+  this->cmGlobalUnixMakefileGenerator3::PrintCompilerAdvice(os, lang, envVar);
+}
+
+std::vector<cmGlobalGenerator::GeneratedMakeCommand>
+cmGlobalNMakeMakefileGenerator::GenerateBuildCommand(
+  const std::string& makeProgram, const std::string& projectName,
+  const std::string& projectDir, std::vector<std::string> const& targetNames,
+  const std::string& config, bool fast, int /*jobs*/, bool verbose,
+  std::vector<std::string> const& makeOptions)
+{
+  std::vector<std::string> nmakeMakeOptions;
+
+  // Since we have full control over the invocation of nmake, let us
+  // make it quiet.
+  nmakeMakeOptions.push_back(this->MakeSilentFlag);
+  nmakeMakeOptions.insert(nmakeMakeOptions.end(), makeOptions.begin(),
+                          makeOptions.end());
+
+  return this->cmGlobalUnixMakefileGenerator3::GenerateBuildCommand(
+    makeProgram, projectName, projectDir, targetNames, config, fast,
+    cmake::NO_BUILD_PARALLEL_LEVEL, verbose, nmakeMakeOptions);
+}
+
+void cmGlobalNMakeMakefileGenerator::PrintBuildCommandAdvice(std::ostream& os,
+                                                             int jobs) const
+{
+  if (jobs != cmake::NO_BUILD_PARALLEL_LEVEL) {
+    // nmake does not support parallel build level
+    // see https://msdn.microsoft.com/en-us/library/afyyse50.aspx
+
+    /* clang-format off */
+    os <<
+      "Warning: NMake does not support parallel builds. "
+      "Ignoring parallel build command line option.\n";
+    /* clang-format on */
+  }
+
+  this->cmGlobalUnixMakefileGenerator3::PrintBuildCommandAdvice(
+    os, cmake::NO_BUILD_PARALLEL_LEVEL);
 }

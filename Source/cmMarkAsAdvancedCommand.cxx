@@ -1,67 +1,49 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmMarkAsAdvancedCommand.h"
 
+#include "cmMakefile.h"
+#include "cmState.h"
+#include "cmStateTypes.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
+
+class cmExecutionStatus;
+
 // cmMarkAsAdvancedCommand
-bool cmMarkAsAdvancedCommand
-::InitialPass(std::vector<std::string> const& args)
+bool cmMarkAsAdvancedCommand::InitialPass(std::vector<std::string> const& args,
+                                          cmExecutionStatus&)
 {
-  if(args.size() < 1 )
-    {
+  if (args.empty()) {
     this->SetError("called with incorrect number of arguments");
     return false;
-    }
+  }
 
-  unsigned int i =0;
+  unsigned int i = 0;
   const char* value = "1";
   bool overwrite = false;
-  if(args[0] == "CLEAR" || args[0] == "FORCE")
-    {
+  if (args[0] == "CLEAR" || args[0] == "FORCE") {
     overwrite = true;
-    if(args[0] == "CLEAR")
-      {
+    if (args[0] == "CLEAR") {
       value = "0";
-      }
-    i = 1;
     }
-  for(; i < args.size(); ++i)
-    {
-    std::string variable = args[i];
-    cmCacheManager* manager = this->Makefile->GetCacheManager();
-    cmCacheManager::CacheIterator it = 
-      manager->GetCacheIterator(variable.c_str());
-    if ( it.IsAtEnd() )
-      {
-      this->Makefile->GetCacheManager()
-        ->AddCacheEntry(variable.c_str(), 0, 0,
-          cmCacheManager::UNINITIALIZED);
+    i = 1;
+  }
+  for (; i < args.size(); ++i) {
+    std::string const& variable = args[i];
+    cmState* state = this->Makefile->GetState();
+    if (!state->GetCacheEntryValue(variable)) {
+      this->Makefile->GetCMakeInstance()->AddCacheEntry(
+        variable, nullptr, nullptr, cmStateEnums::UNINITIALIZED);
       overwrite = true;
-      }
-    it.Find(variable.c_str());
-    if ( it.IsAtEnd() )
-      {
+    }
+    if (!state->GetCacheEntryValue(variable)) {
       cmSystemTools::Error("This should never happen...");
       return false;
-      }
-    if ( !it.PropertyExists("ADVANCED") || overwrite )
-      {
-      it.SetProperty("ADVANCED", value);
-      }
     }
+    if (!state->GetCacheEntryProperty(variable, "ADVANCED") || overwrite) {
+      state->SetCacheEntryProperty(variable, "ADVANCED", value);
+    }
+  }
   return true;
 }
-

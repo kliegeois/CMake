@@ -1,625 +1,840 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmInstallTargetGenerator.h"
 
+#include <assert.h>
+#include <map>
+#include <set>
+#include <sstream>
+#include <utility>
+
+#include "cmComputeLinkInformation.h"
+#include "cmGeneratorExpression.h"
+#include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
+#include "cmInstallType.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmStateTypes.h"
+#include "cmSystemTools.h"
+#include "cmTarget.h"
 #include "cmake.h"
 
-// TODO:
-//   - Skip IF(EXISTS) checks if nothing is done with the installed file
-
-//----------------------------------------------------------------------------
-cmInstallTargetGenerator
-::cmInstallTargetGenerator(cmTarget& t, const char* dest, bool implib,
-                           const char* file_permissions,
-                           std::vector<std::string> const& configurations,
-                           const char* component, bool optional):
-  cmInstallGenerator(dest, configurations, component), Target(&t),
-  ImportLibrary(implib), FilePermissions(file_permissions), Optional(optional)
+cmInstallTargetGenerator::cmInstallTargetGenerator(
+  std::string targetName, const char* dest, bool implib,
+  const char* file_permissions, std::vector<std::string> const& configurations,
+  const char* component, MessageLevel message, bool exclude_from_all,
+  bool optional, cmListFileBacktrace backtrace)
+  : cmInstallGenerator(dest, configurations, component, message,
+                       exclude_from_all)
+  , TargetName(std::move(targetName))
+  , Target(nullptr)
+  , FilePermissions(file_permissions)
+  , ImportLibrary(implib)
+  , Optional(optional)
+  , Backtrace(std::move(backtrace))
 {
-  this->Target->SetHaveInstallRule(true);
+  this->ActionsPerConfig = true;
+  this->NamelinkMode = NamelinkModeNone;
 }
 
-//----------------------------------------------------------------------------
-cmInstallTargetGenerator
-::~cmInstallTargetGenerator()
+cmInstallTargetGenerator::~cmInstallTargetGenerator() = default;
+
+void cmInstallTargetGenerator::GenerateScriptForConfig(
+  std::ostream& os, const std::string& config, Indent indent)
 {
-}
+  cmStateEnums::TargetType targetType = this->Target->GetType();
+  cmInstallType type = cmInstallType();
+  switch (targetType) {
+    case cmStateEnums::EXECUTABLE:
+      type = cmInstallType_EXECUTABLE;
+      break;
+    case cmStateEnums::STATIC_LIBRARY:
+      type = cmInstallType_STATIC_LIBRARY;
+      break;
+    case cmStateEnums::SHARED_LIBRARY:
+      type = cmInstallType_SHARED_LIBRARY;
+      break;
+    case cmStateEnums::MODULE_LIBRARY:
+      type = cmInstallType_MODULE_LIBRARY;
+      break;
+    case cmStateEnums::INTERFACE_LIBRARY:
+      // Not reachable. We never create a cmInstallTargetGenerator for
+      // an INTERFACE_LIBRARY.
+      assert(false &&
+             "INTERFACE_LIBRARY targets have no installable outputs.");
+      break;
 
-//----------------------------------------------------------------------------
-void cmInstallTargetGenerator::GenerateScript(std::ostream& os)
-{
-  // Warn if installing an exclude-from-all target.
-  if(this->Target->GetPropertyAsBool("EXCLUDE_FROM_ALL"))
-    {
-    cmOStringStream msg;
-    msg << "WARNING: Target \"" << this->Target->GetName()
-        << "\" has EXCLUDE_FROM_ALL set and will not be built by default "
-        << "but an install rule has been provided for it.  CMake does "
-        << "not define behavior for this case.";
-    cmSystemTools::Message(msg.str().c_str(), "Warning");
-    }
+    case cmStateEnums::OBJECT_LIBRARY:
+      this->GenerateScriptForConfigObjectLibrary(os, config, indent);
+      return;
 
-  // Track indentation.
-  Indent indent;
-
-  // Begin this block of installation.
-  std::string component_test =
-    this->CreateComponentTest(this->Component.c_str());
-  os << indent << "IF(" << component_test << ")\n";
+    case cmStateEnums::UTILITY:
+    case cmStateEnums::GLOBAL_TARGET:
+    case cmStateEnums::UNKNOWN_LIBRARY:
+      this->Target->GetLocalGenerator()->IssueMessage(
+        MessageType::INTERNAL_ERROR,
+        "cmInstallTargetGenerator created with non-installable target.");
+      return;
+  }
 
   // Compute the build tree directory from which to copy the target.
-  std::string fromDir;
-  if(this->Target->NeedRelinkBeforeInstall())
-    {
-    fromDir = this->Target->GetMakefile()->GetStartOutputDirectory();
-    fromDir += cmake::GetCMakeFilesDirectory();
-    fromDir += "/CMakeRelink.dir/";
-    }
-  else
-    {
-    fromDir = this->Target->GetDirectory(0, this->ImportLibrary);
-    fromDir += "/";
-    }
+  std::string fromDirConfig;
+  if (this->Target->NeedRelinkBeforeInstall(config)) {
+    fromDirConfig =
+      this->Target->GetLocalGenerator()->GetCurrentBinaryDirectory();
+    fromDirConfig += "/CMakeFiles";
+    fromDirConfig += "/CMakeRelink.dir/";
+  } else {
+    cmStateEnums::ArtifactType artifact = this->ImportLibrary
+      ? cmStateEnums::ImportLibraryArtifact
+      : cmStateEnums::RuntimeBinaryArtifact;
+    fromDirConfig = this->Target->GetDirectory(config, artifact);
+    fromDirConfig += "/";
+  }
 
-  // Generate a portion of the script for each configuration.
-  if(this->ConfigurationTypes->empty())
-    {
-    this->GenerateScriptForConfig(os, fromDir.c_str(),
-                                  this->ConfigurationName,
-                                  indent.Next());
-    }
-  else
-    {
-    for(std::vector<std::string>::const_iterator i =
-          this->ConfigurationTypes->begin();
-        i != this->ConfigurationTypes->end(); ++i)
-      {
-      this->GenerateScriptForConfig(os, fromDir.c_str(), i->c_str(),
-                                    indent.Next());
-      }
-    }
-
-  // End this block of installation.
-  os << indent << "ENDIF(" << component_test << ")\n\n";
-}
-
-//----------------------------------------------------------------------------
-void cmInstallTargetGenerator::GenerateScriptForConfig(std::ostream& os,
-                                                       const char* fromDir,
-                                                       const char* config,
-                                                       Indent const& indent)
-{
-  // Compute the per-configuration directory containing the files.
-  std::string fromDirConfig = fromDir;
-  this->Target->GetMakefile()->GetLocalGenerator()->GetGlobalGenerator()
-    ->AppendDirectoryForConfig("", config, "/", fromDirConfig);
-
-  if(config && *config)
-    {
-    std::string config_upper = cmSystemTools::UpperCase(config);
-    // Skip this configuration for config-specific installation that
-    // does not match it.
-    if(!this->Configurations.empty())
-      {
-      bool found = false;
-      for(std::vector<std::string>::const_iterator i =
-            this->Configurations.begin();
-          !found && i != this->Configurations.end(); ++i)
-        {
-        found = found || (cmSystemTools::UpperCase(*i) == config_upper);
-        }
-      if(!found)
-        {
-        return;
-        }
-      }
-
-    // Generate a per-configuration block.
-    std::string config_test = this->CreateConfigTest(config);
-    os << indent << "IF(" << config_test << ")\n";
-    this->GenerateScriptForConfigDir(os, fromDirConfig.c_str(), config,
-                                     indent.Next());
-    os << indent << "ENDIF(" << config_test << ")\n";
-    }
-  else
-    {
-    this->GenerateScriptForConfigDir(os, fromDirConfig.c_str(), config,
-                                     indent);
-    }
-}
-
-//----------------------------------------------------------------------------
-void
-cmInstallTargetGenerator
-::GenerateScriptForConfigDir(std::ostream& os,
-                             const char* fromDirConfig,
-                             const char* config,
-                             Indent const& indent)
-{
-  // Compute the full path to the main installed file for this target.
-  std::string toInstallPath = this->Destination;
-  toInstallPath += "/";
-  toInstallPath += this->GetInstallFilename(this->Target, config,
-                                              this->ImportLibrary, false);
+  std::string toDir =
+    this->ConvertToAbsoluteDestination(this->GetDestination(config));
+  toDir += "/";
 
   // Compute the list of files to install for this target.
-  std::vector<std::string> files;
+  std::vector<std::string> filesFrom;
+  std::vector<std::string> filesTo;
   std::string literal_args;
-  cmTarget::TargetType type = this->Target->GetType();
-  if(type == cmTarget::EXECUTABLE)
-    {
-    std::string targetName;
-    std::string targetNameReal;
-    std::string targetNameImport;
-    std::string targetNamePDB;
-    this->Target->GetExecutableNames(targetName, targetNameReal,
-                                     targetNameImport, targetNamePDB,
-                                     config);
-    if(this->ImportLibrary)
-      {
-      std::string from1 = fromDirConfig;
-      from1 += targetNameImport;
-      files.push_back(from1);
+
+  if (targetType == cmStateEnums::EXECUTABLE) {
+    // There is a bug in cmInstallCommand if this fails.
+    assert(this->NamelinkMode == NamelinkModeNone);
+
+    cmGeneratorTarget::Names targetNames =
+      this->Target->GetExecutableNames(config);
+    if (this->ImportLibrary) {
+      std::string from1 = fromDirConfig + targetNames.ImportLibrary;
+      std::string to1 = toDir + targetNames.ImportLibrary;
+      filesFrom.push_back(std::move(from1));
+      filesTo.push_back(std::move(to1));
+      std::string targetNameImportLib;
+      if (this->Target->GetImplibGNUtoMS(config, targetNames.ImportLibrary,
+                                         targetNameImportLib)) {
+        filesFrom.push_back(fromDirConfig + targetNameImportLib);
+        filesTo.push_back(toDir + targetNameImportLib);
+      }
 
       // An import library looks like a static library.
-      type = cmTarget::STATIC_LIBRARY;
-      }
-    else
-      {
-      std::string from1 = fromDirConfig;
-      from1 += targetName;
+      type = cmInstallType_STATIC_LIBRARY;
+    } else {
+      std::string from1 = fromDirConfig + targetNames.Output;
+      std::string to1 = toDir + targetNames.Output;
 
       // Handle OSX Bundles.
-      if(this->Target->GetMakefile()->IsOn("APPLE") &&
-         this->Target->GetPropertyAsBool("MACOSX_BUNDLE"))
-        {
-        // Compute the source locations of the bundle executable and
-        // Info.plist file.
-        from1 += ".app";
-        files.push_back(from1);
-        type = cmTarget::INSTALL_DIRECTORY;
-        // Need to apply install_name_tool and stripping to binary
-        // inside bundle.
-        toInstallPath += ".app/Contents/MacOS/";
-        toInstallPath += this->GetInstallFilename(this->Target, config,
-                                                  this->ImportLibrary, false);
-        literal_args += " USE_SOURCE_PERMISSIONS";
+      if (this->Target->IsAppBundleOnApple()) {
+        cmMakefile const* mf = this->Target->Target->GetMakefile();
+
+        // Get App Bundle Extension
+        const char* ext = this->Target->GetProperty("BUNDLE_EXTENSION");
+        if (!ext) {
+          ext = "app";
         }
-      else
-        {
-        files.push_back(from1);
-        if(targetNameReal != targetName)
-          {
-          std::string from2 = fromDirConfig;
-          from2 += targetNameReal;
-          files.push_back(from2);
-          }
+
+        // Install the whole app bundle directory.
+        type = cmInstallType_DIRECTORY;
+        literal_args += " USE_SOURCE_PERMISSIONS";
+        from1 += ".";
+        from1 += ext;
+
+        // Tweaks apply to the binary inside the bundle.
+        to1 += ".";
+        to1 += ext;
+        to1 += "/";
+        if (!mf->PlatformIsAppleEmbedded()) {
+          to1 += "Contents/MacOS/";
+        }
+        to1 += targetNames.Output;
+      } else {
+        // Tweaks apply to the real file, so list it first.
+        if (targetNames.Real != targetNames.Output) {
+          std::string from2 = fromDirConfig + targetNames.Real;
+          std::string to2 = toDir += targetNames.Real;
+          filesFrom.push_back(std::move(from2));
+          filesTo.push_back(std::move(to2));
         }
       }
+
+      filesFrom.push_back(std::move(from1));
+      filesTo.push_back(std::move(to1));
     }
-  else
-    {
-    std::string targetName;
-    std::string targetNameSO;
-    std::string targetNameReal;
-    std::string targetNameImport;
-    std::string targetNamePDB;
-    this->Target->GetLibraryNames(targetName, targetNameSO, targetNameReal,
-                                  targetNameImport, targetNamePDB,
-                                  config);
-    if(this->ImportLibrary)
-      {
-      std::string from1 = fromDirConfig;
-      from1 += targetNameImport;
-      files.push_back(from1);
+  } else {
+    cmGeneratorTarget::Names targetNames =
+      this->Target->GetLibraryNames(config);
+    if (this->ImportLibrary) {
+      // There is a bug in cmInstallCommand if this fails.
+      assert(this->NamelinkMode == NamelinkModeNone);
+
+      std::string from1 = fromDirConfig + targetNames.ImportLibrary;
+      std::string to1 = toDir + targetNames.ImportLibrary;
+      filesFrom.push_back(std::move(from1));
+      filesTo.push_back(std::move(to1));
+      std::string targetNameImportLib;
+      if (this->Target->GetImplibGNUtoMS(config, targetNames.ImportLibrary,
+                                         targetNameImportLib)) {
+        filesFrom.push_back(fromDirConfig + targetNameImportLib);
+        filesTo.push_back(toDir + targetNameImportLib);
+      }
 
       // An import library looks like a static library.
-      type = cmTarget::STATIC_LIBRARY;
+      type = cmInstallType_STATIC_LIBRARY;
+    } else if (this->Target->IsFrameworkOnApple()) {
+      // FIXME: In principle we should be able to
+      //   assert(this->NamelinkMode == NamelinkModeNone);
+      // but since the current install() command implementation checks
+      // the FRAMEWORK property immediately instead of delaying until
+      // generate time, it is possible for project code to set the
+      // property after calling install().  In such a case, the install()
+      // command will use the LIBRARY code path and create two install
+      // generators, one for the namelink component (NamelinkModeOnly)
+      // and one for the primary artifact component (NamelinkModeSkip).
+      // Historically this was not diagnosed and resulted in silent
+      // installation of a framework to the LIBRARY destination.
+      // Retain that behavior and warn about the case.
+      switch (this->NamelinkMode) {
+        case NamelinkModeNone:
+          // Normal case.
+          break;
+        case NamelinkModeOnly:
+          // Assume the NamelinkModeSkip instance will warn and install.
+          return;
+        case NamelinkModeSkip: {
+          std::string e = "Target '" + this->Target->GetName() +
+            "' was changed to a FRAMEWORK sometime after install().  "
+            "This may result in the wrong install DESTINATION.  "
+            "Set the FRAMEWORK property earlier.";
+          this->Target->GetGlobalGenerator()->GetCMakeInstance()->IssueMessage(
+            MessageType::AUTHOR_WARNING, e, this->GetBacktrace());
+        } break;
       }
-    else if(this->Target->GetMakefile()->IsOn("APPLE") &&
-            this->Target->GetPropertyAsBool("FRAMEWORK"))
-      {
-      // Compute the build tree location of the framework directory
-      std::string from1 = fromDirConfig;
-      if(config && *config)
-        {
-        from1 += "/";
-        from1 += targetName;
-        from1 += ".framework";
-        }
-      else
-        {
-        // Remove trailing slashes... so that from1 ends with ".framework":
-        //
-        cmSystemTools::ConvertToUnixSlashes(from1);
-        }
-      files.push_back(from1);
 
-      type = cmTarget::INSTALL_DIRECTORY;
-
-      // Need to apply install_name_tool and stripping to binary
-      // inside framework.
-      toInstallPath += ".framework/";
-      toInstallPath += this->GetInstallFilename(this->Target, config,
-                                                this->ImportLibrary, false);
-
+      // Install the whole framework directory.
+      type = cmInstallType_DIRECTORY;
       literal_args += " USE_SOURCE_PERMISSIONS";
+
+      std::string from1 = fromDirConfig + targetNames.Output;
+      from1 = cmSystemTools::GetFilenamePath(from1);
+
+      // Tweaks apply to the binary inside the bundle.
+      std::string to1 = toDir + targetNames.Real;
+
+      filesFrom.push_back(std::move(from1));
+      filesTo.push_back(std::move(to1));
+    } else if (this->Target->IsCFBundleOnApple()) {
+      // Install the whole app bundle directory.
+      type = cmInstallType_DIRECTORY;
+      literal_args += " USE_SOURCE_PERMISSIONS";
+
+      std::string targetNameBase =
+        targetNames.Output.substr(0, targetNames.Output.find('/'));
+
+      std::string from1 = fromDirConfig + targetNameBase;
+      std::string to1 = toDir + targetNames.Output;
+
+      filesFrom.push_back(std::move(from1));
+      filesTo.push_back(std::move(to1));
+    } else {
+      bool haveNamelink = false;
+
+      // Library link name.
+      std::string fromName = fromDirConfig + targetNames.Output;
+      std::string toName = toDir + targetNames.Output;
+
+      // Library interface name.
+      std::string fromSOName;
+      std::string toSOName;
+      if (targetNames.SharedObject != targetNames.Output) {
+        haveNamelink = true;
+        fromSOName = fromDirConfig + targetNames.SharedObject;
+        toSOName = toDir + targetNames.SharedObject;
       }
-    else
-      {
-      std::string from1 = fromDirConfig;
-      from1 += targetName;
-      files.push_back(from1);
-      if(targetNameSO != targetName)
-        {
-        std::string from2 = fromDirConfig;
-        from2 += targetNameSO;
-        files.push_back(from2);
+
+      // Library implementation name.
+      std::string fromRealName;
+      std::string toRealName;
+      if (targetNames.Real != targetNames.Output &&
+          targetNames.Real != targetNames.SharedObject) {
+        haveNamelink = true;
+        fromRealName = fromDirConfig + targetNames.Real;
+        toRealName = toDir + targetNames.Real;
+      }
+
+      // Add the names based on the current namelink mode.
+      if (haveNamelink) {
+        // With a namelink we need to check the mode.
+        if (this->NamelinkMode == NamelinkModeOnly) {
+          // Install the namelink only.
+          filesFrom.push_back(fromName);
+          filesTo.push_back(toName);
+        } else {
+          // Install the real file if it has its own name.
+          if (!fromRealName.empty()) {
+            filesFrom.push_back(fromRealName);
+            filesTo.push_back(toRealName);
+          }
+
+          // Install the soname link if it has its own name.
+          if (!fromSOName.empty()) {
+            filesFrom.push_back(fromSOName);
+            filesTo.push_back(toSOName);
+          }
+
+          // Install the namelink if it is not to be skipped.
+          if (this->NamelinkMode != NamelinkModeSkip) {
+            filesFrom.push_back(fromName);
+            filesTo.push_back(toName);
+          }
         }
-      if(targetNameReal != targetName &&
-         targetNameReal != targetNameSO)
-        {
-        std::string from3 = fromDirConfig;
-        from3 += targetNameReal;
-        files.push_back(from3);
+      } else {
+        // Without a namelink there will be only one file.  Install it
+        // if this is not a namelink-only rule.
+        if (this->NamelinkMode != NamelinkModeOnly) {
+          filesFrom.push_back(fromName);
+          filesTo.push_back(toName);
         }
       }
     }
+  }
+
+  // If this fails the above code is buggy.
+  assert(filesFrom.size() == filesTo.size());
+
+  // Skip this rule if no files are to be installed for the target.
+  if (filesFrom.empty()) {
+    return;
+  }
+
+  // Add pre-installation tweaks.
+  this->AddTweak(os, indent, config, filesTo,
+                 &cmInstallTargetGenerator::PreReplacementTweaks);
 
   // Write code to install the target file.
-  const char* no_dir_permissions = 0;
-  const char* no_rename = 0;
-  const char* no_properties = 0;
+  const char* no_dir_permissions = nullptr;
+  const char* no_rename = nullptr;
   bool optional = this->Optional || this->ImportLibrary;
-  this->AddInstallRule(os, this->Destination.c_str(), type, files,
-                       optional, no_properties,
-                       this->FilePermissions.c_str(), no_dir_permissions,
-                       no_rename, literal_args.c_str(),
+  this->AddInstallRule(os, this->GetDestination(config), type, filesFrom,
+                       optional, this->FilePermissions.c_str(),
+                       no_dir_permissions, no_rename, literal_args.c_str(),
                        indent);
 
-  std::string toDestDirPath = "$ENV{DESTDIR}";
-  if(toInstallPath[0] != '/')
-    {
-    toDestDirPath += "/";
-    }
-  toDestDirPath += toInstallPath;
-
-  this->Target->SetInstallNameFixupPath(toInstallPath.c_str());
-
-  os << indent << "IF(EXISTS \"" << toDestDirPath << "\")\n";
-  this->AddInstallNamePatchRule(os, indent.Next(), config, toDestDirPath);
-  this->AddChrpathPatchRule(os, indent.Next(), toDestDirPath);
-  this->AddRanlibRule(os, indent.Next(), type, toDestDirPath);
-  this->AddStripRule(os, indent.Next(), type, toDestDirPath);
-  os << indent << "ENDIF(EXISTS \"" << toDestDirPath << "\")\n";
+  // Add post-installation tweaks.
+  this->AddTweak(os, indent, config, filesTo,
+                 &cmInstallTargetGenerator::PostReplacementTweaks);
 }
 
-//----------------------------------------------------------------------------
-std::string
-cmInstallTargetGenerator::GetInstallFilename(const char* config) const
+static std::string computeInstallObjectDir(cmGeneratorTarget* gt,
+                                           std::string const& config)
 {
-  return
-    cmInstallTargetGenerator::GetInstallFilename(this->Target, config,
-                                                 this->ImportLibrary, false);
+  std::string objectDir = "objects";
+  if (!config.empty()) {
+    objectDir += "-";
+    objectDir += config;
+  }
+  objectDir += "/";
+  objectDir += gt->GetName();
+  return objectDir;
 }
 
-//----------------------------------------------------------------------------
-std::string cmInstallTargetGenerator::GetInstallFilename(cmTarget* target,
-                                                         const char* config,
-                                                         bool implib,
-                                                         bool useSOName)
+void cmInstallTargetGenerator::GenerateScriptForConfigObjectLibrary(
+  std::ostream& os, const std::string& config, Indent indent)
+{
+  // Compute all the object files inside this target
+  std::vector<std::string> objects;
+  this->Target->GetTargetObjectNames(config, objects);
+
+  std::string const dest = this->GetDestination(config) + "/" +
+    computeInstallObjectDir(this->Target, config);
+
+  std::string const obj_dir = this->Target->GetObjectDirectory(config);
+  std::string const literal_args = " FILES_FROM_DIR \"" + obj_dir + "\"";
+
+  const char* no_dir_permissions = nullptr;
+  const char* no_rename = nullptr;
+  this->AddInstallRule(os, dest, cmInstallType_FILES, objects, this->Optional,
+                       this->FilePermissions.c_str(), no_dir_permissions,
+                       no_rename, literal_args.c_str(), indent);
+}
+
+void cmInstallTargetGenerator::GetInstallObjectNames(
+  std::string const& config, std::vector<std::string>& objects) const
+{
+  this->Target->GetTargetObjectNames(config, objects);
+  for (std::string& o : objects) {
+    o = computeInstallObjectDir(this->Target, config) + "/" + o;
+  }
+}
+
+std::string cmInstallTargetGenerator::GetDestination(
+  std::string const& config) const
+{
+  cmGeneratorExpression ge;
+  return ge.Parse(this->Destination)
+    ->Evaluate(this->Target->GetLocalGenerator(), config);
+}
+
+std::string cmInstallTargetGenerator::GetInstallFilename(
+  const std::string& config) const
+{
+  NameType nameType = this->ImportLibrary ? NameImplib : NameNormal;
+  return cmInstallTargetGenerator::GetInstallFilename(this->Target, config,
+                                                      nameType);
+}
+
+std::string cmInstallTargetGenerator::GetInstallFilename(
+  cmGeneratorTarget const* target, const std::string& config,
+  NameType nameType)
 {
   std::string fname;
   // Compute the name of the library.
-  if(target->GetType() == cmTarget::EXECUTABLE)
-    {
-    std::string targetName;
-    std::string targetNameReal;
-    std::string targetNameImport;
-    std::string targetNamePDB;
-    target->GetExecutableNames(targetName, targetNameReal,
-                               targetNameImport, targetNamePDB,
-                               config);
-    if(implib)
-      {
+  if (target->GetType() == cmStateEnums::EXECUTABLE) {
+    cmGeneratorTarget::Names targetNames = target->GetExecutableNames(config);
+    if (nameType == NameImplib) {
       // Use the import library name.
-      fname = targetNameImport;
+      if (!target->GetImplibGNUtoMS(config, targetNames.ImportLibrary, fname,
+                                    "${CMAKE_IMPORT_LIBRARY_SUFFIX}")) {
+        fname = targetNames.ImportLibrary;
       }
-    else
-      {
+    } else if (nameType == NameReal) {
       // Use the canonical name.
-      fname = targetName;
-      }
+      fname = targetNames.Real;
+    } else {
+      // Use the canonical name.
+      fname = targetNames.Output;
     }
-  else
-    {
-    std::string targetName;
-    std::string targetNameSO;
-    std::string targetNameReal;
-    std::string targetNameImport;
-    std::string targetNamePDB;
-    target->GetLibraryNames(targetName, targetNameSO, targetNameReal,
-                            targetNameImport, targetNamePDB, config);
-    if(implib)
-      {
+  } else {
+    cmGeneratorTarget::Names targetNames = target->GetLibraryNames(config);
+    if (nameType == NameImplib) {
       // Use the import library name.
-      fname = targetNameImport;
+      if (!target->GetImplibGNUtoMS(config, targetNames.ImportLibrary, fname,
+                                    "${CMAKE_IMPORT_LIBRARY_SUFFIX}")) {
+        fname = targetNames.ImportLibrary;
       }
-    else if(useSOName)
-      {
+    } else if (nameType == NameSO) {
       // Use the soname.
-      fname = targetNameSO;
-      }
-    else
-      {
+      fname = targetNames.SharedObject;
+    } else if (nameType == NameReal) {
+      // Use the real name.
+      fname = targetNames.Real;
+    } else {
       // Use the canonical name.
-      fname = targetName;
-      }
+      fname = targetNames.Output;
     }
+  }
 
   return fname;
 }
 
-//----------------------------------------------------------------------------
-void
-cmInstallTargetGenerator
-::AddInstallNamePatchRule(std::ostream& os, Indent const& indent,
-                          const char* config, std::string const& toDestDirPath)
+bool cmInstallTargetGenerator::Compute(cmLocalGenerator* lg)
 {
-  if(this->ImportLibrary ||
-     !(this->Target->GetType() == cmTarget::SHARED_LIBRARY ||
-       this->Target->GetType() == cmTarget::MODULE_LIBRARY ||
-       this->Target->GetType() == cmTarget::EXECUTABLE))
-    {
-    return;
+  // Lookup this target in the current directory.
+  this->Target = lg->FindLocalNonAliasGeneratorTarget(this->TargetName);
+  if (!this->Target) {
+    // If no local target has been found, find it in the global scope.
+    this->Target =
+      lg->GetGlobalGenerator()->FindGeneratorTarget(this->TargetName);
+  }
+
+  return true;
+}
+
+void cmInstallTargetGenerator::AddTweak(std::ostream& os, Indent indent,
+                                        const std::string& config,
+                                        std::string const& file,
+                                        TweakMethod tweak)
+{
+  std::ostringstream tw;
+  (this->*tweak)(tw, indent.Next(), config, file);
+  std::string tws = tw.str();
+  if (!tws.empty()) {
+    os << indent << "if(EXISTS \"" << file << "\" AND\n"
+       << indent << "   NOT IS_SYMLINK \"" << file << "\")\n";
+    os << tws;
+    os << indent << "endif()\n";
+  }
+}
+
+void cmInstallTargetGenerator::AddTweak(std::ostream& os, Indent indent,
+                                        const std::string& config,
+                                        std::vector<std::string> const& files,
+                                        TweakMethod tweak)
+{
+  if (files.size() == 1) {
+    // Tweak a single file.
+    this->AddTweak(os, indent, config, this->GetDestDirPath(files[0]), tweak);
+  } else {
+    // Generate a foreach loop to tweak multiple files.
+    std::ostringstream tw;
+    this->AddTweak(tw, indent.Next(), config, "${file}", tweak);
+    std::string tws = tw.str();
+    if (!tws.empty()) {
+      Indent indent2 = indent.Next().Next();
+      os << indent << "foreach(file\n";
+      for (std::string const& f : files) {
+        os << indent2 << "\"" << this->GetDestDirPath(f) << "\"\n";
+      }
+      os << indent2 << ")\n";
+      os << tws;
+      os << indent << "endforeach()\n";
     }
+  }
+}
+
+std::string cmInstallTargetGenerator::GetDestDirPath(std::string const& file)
+{
+  // Construct the path of the file on disk after installation on
+  // which tweaks may be performed.
+  std::string toDestDirPath = "$ENV{DESTDIR}";
+  if (file[0] != '/' && file[0] != '$') {
+    toDestDirPath += "/";
+  }
+  toDestDirPath += file;
+  return toDestDirPath;
+}
+
+void cmInstallTargetGenerator::PreReplacementTweaks(std::ostream& os,
+                                                    Indent indent,
+                                                    const std::string& config,
+                                                    std::string const& file)
+{
+  this->AddRPathCheckRule(os, indent, config, file);
+}
+
+void cmInstallTargetGenerator::PostReplacementTweaks(std::ostream& os,
+                                                     Indent indent,
+                                                     const std::string& config,
+                                                     std::string const& file)
+{
+  this->AddInstallNamePatchRule(os, indent, config, file);
+  this->AddChrpathPatchRule(os, indent, config, file);
+  this->AddUniversalInstallRule(os, indent, file);
+  this->AddRanlibRule(os, indent, file);
+  this->AddStripRule(os, indent, file);
+}
+
+void cmInstallTargetGenerator::AddInstallNamePatchRule(
+  std::ostream& os, Indent indent, const std::string& config,
+  std::string const& toDestDirPath)
+{
+  if (this->ImportLibrary ||
+      !(this->Target->GetType() == cmStateEnums::SHARED_LIBRARY ||
+        this->Target->GetType() == cmStateEnums::MODULE_LIBRARY ||
+        this->Target->GetType() == cmStateEnums::EXECUTABLE)) {
+    return;
+  }
 
   // Fix the install_name settings in installed binaries.
   std::string installNameTool =
-    this->Target->GetMakefile()->GetSafeDefinition("CMAKE_INSTALL_NAME_TOOL");
+    this->Target->Target->GetMakefile()->GetSafeDefinition(
+      "CMAKE_INSTALL_NAME_TOOL");
 
-  if(!installNameTool.size())
-    {
+  if (installNameTool.empty()) {
     return;
-    }
+  }
 
   // Build a map of build-tree install_name to install-tree install_name for
   // shared libraries linked to this target.
-  std::map<cmStdString, cmStdString> install_name_remap;
-  cmTarget::LinkLibraryType linkType = cmTarget::OPTIMIZED;
-  if(config && cmSystemTools::UpperCase(config) == "DEBUG")
-    {
-    linkType = cmTarget::DEBUG;
-    }
-  // TODO: Merge with ComputeLinkInformation.
-  const cmTarget::LinkLibraryVectorType& inLibs = 
-    this->Target->GetLinkLibraries();
-  for(cmTarget::LinkLibraryVectorType::const_iterator j = inLibs.begin();
-      j != inLibs.end(); ++j)
-    {
-    std::string lib = j->first;
-    if((this->Target->GetType() == cmTarget::EXECUTABLE ||
-        lib != this->Target->GetName()) &&
-       (j->second == cmTarget::GENERAL || j->second == linkType))
-      {
-      if(cmTarget* tgt = this->Target->GetMakefile()->
-         GetLocalGenerator()->GetGlobalGenerator()->
-         FindTarget(0, lib.c_str(), false))
-        {
-        if(tgt->GetType() == cmTarget::SHARED_LIBRARY)
-          {
-          // If the build tree and install tree use different path
-          // components of the install_name field then we need to create a
-          // mapping to be applied after installation.
-          std::string for_build = tgt->GetInstallNameDirForBuildTree(config);
-          std::string for_install = 
-            tgt->GetInstallNameDirForInstallTree(config);
-          std::string fname =
-            this->GetInstallFilename(tgt, config, false, true);
+  std::map<std::string, std::string> install_name_remap;
+  if (cmComputeLinkInformation* cli =
+        this->Target->GetLinkInformation(config)) {
+    std::set<cmGeneratorTarget const*> const& sharedLibs =
+      cli->GetSharedLibrariesLinked();
+    for (cmGeneratorTarget const* tgt : sharedLibs) {
+      // The install_name of an imported target does not change.
+      if (tgt->IsImported()) {
+        continue;
+      }
 
-          // Map from the build-tree install_name.
-          for_build += fname;
+      // If the build tree and install tree use different path
+      // components of the install_name field then we need to create a
+      // mapping to be applied after installation.
+      std::string for_build = tgt->GetInstallNameDirForBuildTree(config);
+      std::string for_install = tgt->GetInstallNameDirForInstallTree();
+      if (for_build != for_install) {
+        // The directory portions differ.  Append the filename to
+        // create the mapping.
+        std::string fname = this->GetInstallFilename(tgt, config, NameSO);
 
-          // Map to the install-tree install_name.
-          if (!for_install.empty())
-            {
-            for_install += fname;
-            }
-          else
-            {
-            for_install = tgt->GetInstallNameFixupPath();
-            }
+        // Map from the build-tree install_name.
+        for_build += fname;
 
-          if(for_build != for_install)
-            {
-            // Store the mapping entry.
-            install_name_remap[for_build] = for_install;
-            }
-          }
-        }
+        // Map to the install-tree install_name.
+        for_install += fname;
+
+        // Store the mapping entry.
+        install_name_remap[for_build] = for_install;
       }
     }
+  }
 
   // Edit the install_name of the target itself if necessary.
   std::string new_id;
-  if(this->Target->GetType() == cmTarget::SHARED_LIBRARY)
-    {
-    std::string for_build = 
+  if (this->Target->GetType() == cmStateEnums::SHARED_LIBRARY) {
+    std::string for_build =
       this->Target->GetInstallNameDirForBuildTree(config);
-    std::string for_install = 
-      this->Target->GetInstallNameDirForInstallTree(config);
-    std::string fname =
-      this->GetInstallFilename(this->Target, config, this->ImportLibrary,
-                               true);
-    for_build += fname;
-    if (!for_install.empty())
-      {
-      for_install += fname;
-      }
-    else
-      {
-      for_install = this->Target->GetInstallNameFixupPath();
-      }
-    if(for_build != for_install)
-      {
+    std::string for_install = this->Target->GetInstallNameDirForInstallTree();
+
+    if (this->Target->IsFrameworkOnApple() && for_install.empty()) {
+      // Frameworks seem to have an id corresponding to their own full
+      // path.
+      // ...
+      // for_install = fullDestPath_without_DESTDIR_or_name;
+    }
+
+    // If the install name will change on installation set the new id
+    // on the installed file.
+    if (for_build != for_install) {
       // Prepare to refer to the install-tree install_name.
       new_id = for_install;
-      }
+      new_id += this->GetInstallFilename(this->Target, config, NameSO);
     }
+  }
 
   // Write a rule to run install_name_tool to set the install-tree
   // install_name value and references.
-  if(!new_id.empty() || !install_name_remap.empty())
-    {
-    os << indent << "EXECUTE_PROCESS(COMMAND \"" << installNameTool;
+  if (!new_id.empty() || !install_name_remap.empty()) {
+    os << indent << "execute_process(COMMAND \"" << installNameTool;
     os << "\"";
-    if(!new_id.empty())
-      {
+    if (!new_id.empty()) {
       os << "\n" << indent << "  -id \"" << new_id << "\"";
-      }
-    for(std::map<cmStdString, cmStdString>::const_iterator
-          i = install_name_remap.begin();
-        i != install_name_remap.end(); ++i)
-      {
-      os << "\n" << indent << "  -change \""
-         << i->first << "\" \"" << i->second << "\"";
-      }
+    }
+    for (auto const& i : install_name_remap) {
+      os << "\n"
+         << indent << "  -change \"" << i.first << "\" \"" << i.second << "\"";
+    }
     os << "\n" << indent << "  \"" << toDestDirPath << "\")\n";
-    }
+  }
 }
 
-//----------------------------------------------------------------------------
-void
-cmInstallTargetGenerator
-::AddChrpathPatchRule(std::ostream& os, Indent const& indent,
-                      std::string const& toDestDirPath)
+void cmInstallTargetGenerator::AddRPathCheckRule(
+  std::ostream& os, Indent indent, const std::string& config,
+  std::string const& toDestDirPath)
 {
-  if(this->ImportLibrary ||
-     !(this->Target->GetType() == cmTarget::SHARED_LIBRARY ||
-       this->Target->GetType() == cmTarget::MODULE_LIBRARY ||
-       this->Target->GetType() == cmTarget::EXECUTABLE))
-    {
+  // Skip the chrpath if the target does not need it.
+  if (this->ImportLibrary || !this->Target->IsChrpathUsed(config)) {
     return;
-    }
-
-  if((this->Target->GetMakefile()->IsOn("CMAKE_USE_CHRPATH")==false)
-      || (this->Target->IsChrpathAvailable()==false))
-    {
+  }
+  // Skip if on Apple
+  if (this->Target->Target->GetMakefile()->IsOn(
+        "CMAKE_PLATFORM_HAS_INSTALLNAME")) {
     return;
-    }
+  }
 
-  // Fix the RPATH in installed ELF binaries using chrpath.
-  std::string chrpathTool =
-    this->Target->GetMakefile()->GetSafeDefinition("CMAKE_CHRPATH");
-
-  std::string installRpath;
-  std::string dummy;
-  this->Target->GetMakefile()->GetLocalGenerator()->GetLinkerArgs(
-                                  installRpath, dummy, *this->Target, true, 0);
-
-  const char* linkLanguage = this->Target->GetLinkerLanguage(this->Target->
-                     GetMakefile()->GetLocalGenerator()->GetGlobalGenerator());
-  if (linkLanguage==0)
-    {
+  // Get the link information for this target.
+  // It can provide the RPATH.
+  cmComputeLinkInformation* cli = this->Target->GetLinkInformation(config);
+  if (!cli) {
     return;
-    }
+  }
 
-  std::string runTimeFlagVar = "CMAKE_SHARED_LIBRARY_RUNTIME_";
-  runTimeFlagVar += linkLanguage;
-  runTimeFlagVar += "_FLAG";
+  // Get the install RPATH from the link information.
+  std::string newRpath = cli->GetChrpathString();
 
-  std::string runtimeFlag = 
-        this->Target->GetMakefile()->GetSafeDefinition(runTimeFlagVar.c_str());
-
-  const char* newRpath=installRpath.c_str();
-  if (strstr(installRpath.c_str(), runtimeFlag.c_str())==installRpath.c_str())
-    {
-    newRpath = installRpath.c_str()+strlen(runtimeFlag.c_str());
-    }
-
-  // Write a rule to run chrpath to set the install-tree RPATH
-  os << indent << "EXECUTE_PROCESS(COMMAND \"" << chrpathTool;
-  os << "\" -r \"" << newRpath << "\" \"" << toDestDirPath << "\")\n";
+  // Write a rule to remove the installed file if its rpath is not the
+  // new rpath.  This is needed for existing build/install trees when
+  // the installed rpath changes but the file is not rebuilt.
+  /* clang-format off */
+  os << indent << "file(RPATH_CHECK\n"
+     << indent << "     FILE \"" << toDestDirPath << "\"\n"
+     << indent << "     RPATH \"" << newRpath << "\")\n";
+  /* clang-format on */
 }
 
-//----------------------------------------------------------------------------
-void
-cmInstallTargetGenerator::AddStripRule(std::ostream& os,
-                                       Indent const& indent,
-                                       cmTarget::TargetType type,
-                                       const std::string& toDestDirPath)
+void cmInstallTargetGenerator::AddChrpathPatchRule(
+  std::ostream& os, Indent indent, const std::string& config,
+  std::string const& toDestDirPath)
+{
+  // Skip the chrpath if the target does not need it.
+  if (this->ImportLibrary || !this->Target->IsChrpathUsed(config)) {
+    return;
+  }
+
+  // Get the link information for this target.
+  // It can provide the RPATH.
+  cmComputeLinkInformation* cli = this->Target->GetLinkInformation(config);
+  if (!cli) {
+    return;
+  }
+
+  cmMakefile* mf = this->Target->Target->GetMakefile();
+
+  if (mf->IsOn("CMAKE_PLATFORM_HAS_INSTALLNAME")) {
+    // If using install_name_tool, set up the rules to modify the rpaths.
+    std::string installNameTool =
+      mf->GetSafeDefinition("CMAKE_INSTALL_NAME_TOOL");
+
+    std::vector<std::string> oldRuntimeDirs, newRuntimeDirs;
+    cli->GetRPath(oldRuntimeDirs, false);
+    cli->GetRPath(newRuntimeDirs, true);
+
+    std::string darwin_major_version_s =
+      mf->GetSafeDefinition("DARWIN_MAJOR_VERSION");
+
+    std::istringstream ss(darwin_major_version_s);
+    int darwin_major_version;
+    ss >> darwin_major_version;
+    if (!ss.fail() && darwin_major_version <= 9 &&
+        (!oldRuntimeDirs.empty() || !newRuntimeDirs.empty())) {
+      std::ostringstream msg;
+      msg
+        << "WARNING: Target \"" << this->Target->GetName()
+        << "\" has runtime paths which cannot be changed during install.  "
+        << "To change runtime paths, OS X version 10.6 or newer is required.  "
+        << "Therefore, runtime paths will not be changed when installing.  "
+        << "CMAKE_BUILD_WITH_INSTALL_RPATH may be used to work around"
+           " this limitation.";
+      mf->IssueMessage(MessageType::WARNING, msg.str());
+    } else {
+      // Note: These paths are kept unique to avoid
+      // install_name_tool corruption.
+      std::set<std::string> runpaths;
+      for (std::string const& i : oldRuntimeDirs) {
+        std::string runpath =
+          mf->GetGlobalGenerator()->ExpandCFGIntDir(i, config);
+
+        if (runpaths.find(runpath) == runpaths.end()) {
+          runpaths.insert(runpath);
+          os << indent << "execute_process(COMMAND " << installNameTool
+             << "\n";
+          os << indent << "  -delete_rpath \"" << runpath << "\"\n";
+          os << indent << "  \"" << toDestDirPath << "\")\n";
+        }
+      }
+
+      runpaths.clear();
+      for (std::string const& i : newRuntimeDirs) {
+        std::string runpath =
+          mf->GetGlobalGenerator()->ExpandCFGIntDir(i, config);
+
+        if (runpaths.find(runpath) == runpaths.end()) {
+          os << indent << "execute_process(COMMAND " << installNameTool
+             << "\n";
+          os << indent << "  -add_rpath \"" << runpath << "\"\n";
+          os << indent << "  \"" << toDestDirPath << "\")\n";
+        }
+      }
+    }
+  } else {
+    // Construct the original rpath string to be replaced.
+    std::string oldRpath = cli->GetRPathString(false);
+
+    // Get the install RPATH from the link information.
+    std::string newRpath = cli->GetChrpathString();
+
+    // Skip the rule if the paths are identical
+    if (oldRpath == newRpath) {
+      return;
+    }
+
+    // Write a rule to run chrpath to set the install-tree RPATH
+    os << indent << "file(RPATH_CHANGE\n"
+       << indent << "     FILE \"" << toDestDirPath << "\"\n"
+       << indent << "     OLD_RPATH \"" << oldRpath << "\"\n"
+       << indent << "     NEW_RPATH \"" << newRpath << "\")\n";
+  }
+}
+
+void cmInstallTargetGenerator::AddStripRule(std::ostream& os, Indent indent,
+                                            const std::string& toDestDirPath)
 {
 
-  // don't strip static libraries, because it removes the only symbol table
-  // they have so you can't link to them anymore
-  if(type == cmTarget::STATIC_LIBRARY)
-    {
+  // don't strip static and import libraries, because it removes the only
+  // symbol table they have so you can't link to them anymore
+  if (this->Target->GetType() == cmStateEnums::STATIC_LIBRARY ||
+      this->ImportLibrary) {
     return;
-    }
+  }
 
   // Don't handle OSX Bundles.
-  if(this->Target->GetMakefile()->IsOn("APPLE") &&
-     this->Target->GetPropertyAsBool("MACOSX_BUNDLE"))
-    {
+  if (this->Target->Target->GetMakefile()->IsOn("APPLE") &&
+      this->Target->GetPropertyAsBool("MACOSX_BUNDLE")) {
     return;
-    }
+  }
 
-  if(! this->Target->GetMakefile()->IsSet("CMAKE_STRIP"))
-    {
+  if (!this->Target->Target->GetMakefile()->IsSet("CMAKE_STRIP")) {
     return;
-    }
+  }
 
-  os << indent << "IF(CMAKE_INSTALL_DO_STRIP)\n";
-  os << indent << "  EXECUTE_PROCESS(COMMAND \""
-     << this->Target->GetMakefile()->GetDefinition("CMAKE_STRIP")
-     << "\" \"" << toDestDirPath << "\")\n";
-  os << indent << "ENDIF(CMAKE_INSTALL_DO_STRIP)\n";
+  std::string stripArgs;
+
+  // macOS 'strip' is picky, executables need '-u -r' and dylibs need '-x'.
+  if (this->Target->Target->GetMakefile()->IsOn("APPLE")) {
+    if (this->Target->GetType() == cmStateEnums::SHARED_LIBRARY ||
+        this->Target->GetType() == cmStateEnums::MODULE_LIBRARY) {
+      stripArgs = "-x ";
+    } else if (this->Target->GetType() == cmStateEnums::EXECUTABLE) {
+      stripArgs = "-u -r ";
+    }
+  }
+
+  os << indent << "if(CMAKE_INSTALL_DO_STRIP)\n";
+  os << indent << "  execute_process(COMMAND \""
+     << this->Target->Target->GetMakefile()->GetDefinition("CMAKE_STRIP")
+     << "\" " << stripArgs << "\"" << toDestDirPath << "\")\n";
+  os << indent << "endif()\n";
 }
 
-//----------------------------------------------------------------------------
-void
-cmInstallTargetGenerator::AddRanlibRule(std::ostream& os,
-                                        Indent const& indent,
-                                        cmTarget::TargetType type,
-                                        const std::string& toDestDirPath)
+void cmInstallTargetGenerator::AddRanlibRule(std::ostream& os, Indent indent,
+                                             const std::string& toDestDirPath)
 {
   // Static libraries need ranlib on this platform.
-  if(type != cmTarget::STATIC_LIBRARY)
-    {
+  if (this->Target->GetType() != cmStateEnums::STATIC_LIBRARY) {
     return;
-    }
+  }
 
   // Perform post-installation processing on the file depending
   // on its type.
-  if(!this->Target->GetMakefile()->IsOn("APPLE"))
-    {
+  if (!this->Target->Target->GetMakefile()->IsOn("APPLE")) {
     return;
-    }
+  }
 
-  std::string ranlib =
-    this->Target->GetMakefile()->GetRequiredDefinition("CMAKE_RANLIB");
-  if(ranlib.empty())
-    {
+  const std::string& ranlib =
+    this->Target->Target->GetMakefile()->GetRequiredDefinition("CMAKE_RANLIB");
+  if (ranlib.empty()) {
     return;
-    }
+  }
 
-  os << indent << "EXECUTE_PROCESS(COMMAND \""
-     << ranlib << "\" \"" << toDestDirPath << "\")\n";
+  os << indent << "execute_process(COMMAND \"" << ranlib << "\" \""
+     << toDestDirPath << "\")\n";
+}
+
+void cmInstallTargetGenerator::AddUniversalInstallRule(
+  std::ostream& os, Indent indent, const std::string& toDestDirPath)
+{
+  cmMakefile const* mf = this->Target->Target->GetMakefile();
+
+  if (!mf->PlatformIsAppleEmbedded() || !mf->IsOn("XCODE")) {
+    return;
+  }
+
+  const char* xcodeVersion = mf->GetDefinition("XCODE_VERSION");
+  if (!xcodeVersion ||
+      cmSystemTools::VersionCompareGreater("6", xcodeVersion)) {
+    return;
+  }
+
+  switch (this->Target->GetType()) {
+    case cmStateEnums::EXECUTABLE:
+    case cmStateEnums::STATIC_LIBRARY:
+    case cmStateEnums::SHARED_LIBRARY:
+    case cmStateEnums::MODULE_LIBRARY:
+      break;
+
+    default:
+      return;
+  }
+
+  if (!this->Target->Target->GetPropertyAsBool("IOS_INSTALL_COMBINED")) {
+    return;
+  }
+
+  os << indent << "include(CMakeIOSInstallCombined)\n";
+  os << indent << "ios_install_combined("
+     << "\"" << this->Target->Target->GetName() << "\" "
+     << "\"" << toDestDirPath << "\")\n";
 }

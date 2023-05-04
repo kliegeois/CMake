@@ -1,41 +1,41 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmProperty_h
 #define cmProperty_h
 
-#include "cmStandardIncludes.h"
+#include "cmConfigure.h" // IWYU pragma: keep
 
-class cmProperty 
+#include <string>
+
+class cmProperty
 {
 public:
-  enum ScopeType { TARGET, SOURCE_FILE, DIRECTORY, GLOBAL, 
-                   TEST, VARIABLE, CACHED_VARIABLE };
+  enum ScopeType
+  {
+    TARGET,
+    SOURCE_FILE,
+    DIRECTORY,
+    GLOBAL,
+    CACHE,
+    TEST,
+    VARIABLE,
+    CACHED_VARIABLE,
+    INSTALL
+  };
 
   // set this property
-  void Set(const char *name, const char *value);
+  void Set(const char* value);
+
+  // append to this property
+  void Append(const char* value, bool asString = false);
 
   // get the value
-  const char *GetValue() const;
+  const char* GetValue() const;
 
   // construct with the value not set
-  cmProperty() { this->ValueHasBeenSet = false; };
+  cmProperty() { this->ValueHasBeenSet = false; }
 
 protected:
-  std::string Name;
   std::string Value;
   bool ValueHasBeenSet;
 };

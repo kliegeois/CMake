@@ -1,108 +1,149 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCTestConfigureCommand.h"
 
 #include "cmCTest.h"
-#include "cmCTestGenericHandler.h"
+#include "cmCTestConfigureHandler.h"
+#include "cmGlobalGenerator.h"
+#include "cmMakefile.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
+
+#include <sstream>
+#include <string.h>
+#include <vector>
+
+cmCTestConfigureCommand::cmCTestConfigureCommand()
+{
+  this->Arguments[ctc_OPTIONS] = "OPTIONS";
+  this->Arguments[ctc_LAST] = nullptr;
+  this->Last = ctc_LAST;
+}
 
 cmCTestGenericHandler* cmCTestConfigureCommand::InitializeHandler()
 {
-  if ( this->Values[ct_BUILD] )
-    {
-    this->CTest->SetCTestConfiguration("BuildDirectory",
-      cmSystemTools::CollapseFullPath(
-        this->Values[ct_BUILD]).c_str());
-    }
-  else
-    {
-    this->CTest->SetCTestConfiguration("BuildDirectory",
-      cmSystemTools::CollapseFullPath(
-       this->Makefile->GetDefinition("CTEST_BINARY_DIRECTORY")).c_str());
-    }
-  if ( this->Values[ct_SOURCE] )
-    {
-    this->CTest->SetCTestConfiguration("SourceDirectory",
-      cmSystemTools::CollapseFullPath(
-        this->Values[ct_SOURCE]).c_str());
-    }
-  else
-    {
-    this->CTest->SetCTestConfiguration("SourceDirectory",
-      cmSystemTools::CollapseFullPath(
-        this->Makefile->GetDefinition("CTEST_SOURCE_DIRECTORY")).c_str());
-    }
-  if ( this->CTest->GetCTestConfiguration("BuildDirectory").empty() )
-    {
-    this->SetError("Build directory not specified. Either use BUILD "
+  std::vector<std::string> options;
+
+  if (this->Values[ctc_OPTIONS]) {
+    cmSystemTools::ExpandListArgument(this->Values[ctc_OPTIONS], options);
+  }
+
+  if (this->CTest->GetCTestConfiguration("BuildDirectory").empty()) {
+    this->SetError(
+      "Build directory not specified. Either use BUILD "
       "argument to CTEST_CONFIGURE command or set CTEST_BINARY_DIRECTORY "
       "variable");
-    return 0;
-    }
+    return nullptr;
+  }
 
-  const char* ctestConfigureCommand
-    = this->Makefile->GetDefinition("CTEST_CONFIGURE_COMMAND");
-  if ( ctestConfigureCommand && *ctestConfigureCommand )
-    {
+  const char* ctestConfigureCommand =
+    this->Makefile->GetDefinition("CTEST_CONFIGURE_COMMAND");
+
+  if (ctestConfigureCommand && *ctestConfigureCommand) {
     this->CTest->SetCTestConfiguration("ConfigureCommand",
-      ctestConfigureCommand);
-    }
-  else
-    {
-    const char* cmakeGeneratorName
-      = this->Makefile->GetDefinition("CTEST_CMAKE_GENERATOR");
-    if ( cmakeGeneratorName && *cmakeGeneratorName )
-      {
-      const std::string& source_dir
-        = this->CTest->GetCTestConfiguration("SourceDirectory");
-      if ( source_dir.empty() )
-        {
-        this->SetError("Source directory not specified. Either use SOURCE "
+                                       ctestConfigureCommand, this->Quiet);
+  } else {
+    const char* cmakeGeneratorName =
+      this->Makefile->GetDefinition("CTEST_CMAKE_GENERATOR");
+    if (cmakeGeneratorName && *cmakeGeneratorName) {
+      const std::string& source_dir =
+        this->CTest->GetCTestConfiguration("SourceDirectory");
+      if (source_dir.empty()) {
+        this->SetError(
+          "Source directory not specified. Either use SOURCE "
           "argument to CTEST_CONFIGURE command or set CTEST_SOURCE_DIRECTORY "
           "variable");
-        return 0;
-        }
+        return nullptr;
+      }
+
+      const std::string cmakelists_file = source_dir + "/CMakeLists.txt";
+      if (!cmSystemTools::FileExists(cmakelists_file)) {
+        std::ostringstream e;
+        e << "CMakeLists.txt file does not exist [" << cmakelists_file << "]";
+        this->SetError(e.str());
+        return nullptr;
+      }
+
+      bool multiConfig = false;
+      bool cmakeBuildTypeInOptions = false;
+
+      cmGlobalGenerator* gg =
+        this->Makefile->GetCMakeInstance()->CreateGlobalGenerator(
+          cmakeGeneratorName);
+      if (gg) {
+        multiConfig = gg->IsMultiConfig();
+        delete gg;
+      }
+
       std::string cmakeConfigureCommand = "\"";
-      cmakeConfigureCommand += this->CTest->GetCMakeExecutable();
-      cmakeConfigureCommand += "\" \"-G";
+      cmakeConfigureCommand += cmSystemTools::GetCMakeCommand();
+      cmakeConfigureCommand += "\"";
+
+      for (std::string const& option : options) {
+        cmakeConfigureCommand += " \"";
+        cmakeConfigureCommand += option;
+        cmakeConfigureCommand += "\"";
+
+        if ((nullptr != strstr(option.c_str(), "CMAKE_BUILD_TYPE=")) ||
+            (nullptr != strstr(option.c_str(), "CMAKE_BUILD_TYPE:STRING="))) {
+          cmakeBuildTypeInOptions = true;
+        }
+      }
+
+      if (!multiConfig && !cmakeBuildTypeInOptions &&
+          !this->CTest->GetConfigType().empty()) {
+        cmakeConfigureCommand += " \"-DCMAKE_BUILD_TYPE:STRING=";
+        cmakeConfigureCommand += this->CTest->GetConfigType();
+        cmakeConfigureCommand += "\"";
+      }
+
+      if (this->Makefile->IsOn("CTEST_USE_LAUNCHERS")) {
+        cmakeConfigureCommand += " \"-DCTEST_USE_LAUNCHERS:BOOL=TRUE\"";
+      }
+
+      cmakeConfigureCommand += " \"-G";
       cmakeConfigureCommand += cmakeGeneratorName;
-      cmakeConfigureCommand += "\" \"";
+      cmakeConfigureCommand += "\"";
+
+      const char* cmakeGeneratorPlatform =
+        this->Makefile->GetDefinition("CTEST_CMAKE_GENERATOR_PLATFORM");
+      if (cmakeGeneratorPlatform && *cmakeGeneratorPlatform) {
+        cmakeConfigureCommand += " \"-A";
+        cmakeConfigureCommand += cmakeGeneratorPlatform;
+        cmakeConfigureCommand += "\"";
+      }
+
+      const char* cmakeGeneratorToolset =
+        this->Makefile->GetDefinition("CTEST_CMAKE_GENERATOR_TOOLSET");
+      if (cmakeGeneratorToolset && *cmakeGeneratorToolset) {
+        cmakeConfigureCommand += " \"-T";
+        cmakeConfigureCommand += cmakeGeneratorToolset;
+        cmakeConfigureCommand += "\"";
+      }
+
+      cmakeConfigureCommand += " \"";
       cmakeConfigureCommand += source_dir;
       cmakeConfigureCommand += "\"";
-      this->CTest->SetCTestConfiguration("ConfigureCommand",
-        cmakeConfigureCommand.c_str());
-      }
-    else
-      {
-      this->SetError("Configure command is not specified. If this is a CMake "
-        "project, specify CTEST_CMAKE_GENERATOR, or if this is not CMake "
-        "project, specify CTEST_CONFIGURE_COMMAND.");
-      return 0;
-      }
-    }
 
-  cmCTestGenericHandler* handler
-    = this->CTest->GetInitializedHandler("configure");
-  if ( !handler )
-    {
-    this->SetError(
-      "internal CTest error. Cannot instantiate configure handler");
-    return 0;
+      this->CTest->SetCTestConfiguration(
+        "ConfigureCommand", cmakeConfigureCommand.c_str(), this->Quiet);
+    } else {
+      this->SetError(
+        "Configure command is not specified. If this is a "
+        "\"built with CMake\" project, set CTEST_CMAKE_GENERATOR. If not, "
+        "set CTEST_CONFIGURE_COMMAND.");
+      return nullptr;
     }
+  }
+
+  if (const char* labelsForSubprojects =
+        this->Makefile->GetDefinition("CTEST_LABELS_FOR_SUBPROJECTS")) {
+    this->CTest->SetCTestConfiguration("LabelsForSubprojects",
+                                       labelsForSubprojects, this->Quiet);
+  }
+
+  cmCTestConfigureHandler* handler = this->CTest->GetConfigureHandler();
+  handler->Initialize();
+  handler->SetQuiet(this->Quiet);
   return handler;
 }
-
-

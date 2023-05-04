@@ -1,23 +1,32 @@
-# - Find wget
-# This module looks for wget. This module defines the 
-# following values:
-#  WGET_EXECUTABLE: the full path to the wget tool.
-#  WGET_FOUND: True if wget has been found.
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-INCLUDE(FindCygwin)
+#[=======================================================================[.rst:
+FindWget
+--------
 
-FIND_PROGRAM(WGET_EXECUTABLE
+Find wget
+
+This module looks for wget.  This module defines the following values:
+
+::
+
+  WGET_EXECUTABLE: the full path to the wget tool.
+  WGET_FOUND: True if wget has been found.
+#]=======================================================================]
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindCygwin.cmake)
+
+find_program(WGET_EXECUTABLE
   wget
   ${CYGWIN_INSTALL_PATH}/bin
 )
 
-# handle the QUIETLY and REQUIRED arguments and set WGET_FOUND to TRUE if 
-# all listed variables are TRUE
-INCLUDE(FindPackageHandleStandardArgs)
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
 FIND_PACKAGE_HANDLE_STANDARD_ARGS(Wget DEFAULT_MSG WGET_EXECUTABLE)
 
-MARK_AS_ADVANCED( WGET_EXECUTABLE )
+mark_as_advanced( WGET_EXECUTABLE )
 
 # WGET option is deprecated.
 # use WGET_EXECUTABLE instead.
-SET (WGET ${WGET_EXECUTABLE} )
+set (WGET ${WGET_EXECUTABLE})

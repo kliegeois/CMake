@@ -1,12 +1,35 @@
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
+
+
+if(CMAKE_C_COMPILER_FORCED)
+  # The compiler configuration was forced by the user.
+  # Assume the user has configured all compiler information.
+  set(CMAKE_C_COMPILER_WORKS TRUE)
+  return()
+endif()
+
+include(CMakeTestCompilerCommon)
+
+# work around enforced code signing and / or missing exectuable target type
+set(__CMAKE_SAVED_TRY_COMPILE_TARGET_TYPE ${CMAKE_TRY_COMPILE_TARGET_TYPE})
+if(_CMAKE_FEATURE_DETECTION_TARGET_TYPE)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE ${_CMAKE_FEATURE_DETECTION_TARGET_TYPE})
+endif()
+
+# Remove any cached result from an older CMake version.
+# We now store this in CMakeCCompiler.cmake.
+unset(CMAKE_C_COMPILER_WORKS CACHE)
 
 # This file is used by EnableLanguage in cmGlobalGenerator to
 # determine that that selected C compiler can actually compile
 # and link the most basic of programs.   If not, a fatal error
 # is set and cmake stops processing commands and will not generate
 # any makefiles or projects.
-IF(NOT CMAKE_C_COMPILER_WORKS)
-  MESSAGE(STATUS "Check for working C compiler: ${CMAKE_C_COMPILER}")
-  FILE(WRITE ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/testCCompiler.c
+if(NOT CMAKE_C_COMPILER_WORKS)
+  PrintTestCompilerStatus("C" "")
+  __TestCompiler_setTryCompileTargetType()
+  file(WRITE ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/testCCompiler.c
     "#ifdef __cplusplus\n"
     "# error \"The CMAKE_C_COMPILER is set to a C++ compiler\"\n"
     "#endif\n"
@@ -17,37 +40,58 @@ IF(NOT CMAKE_C_COMPILER_WORKS)
     "#else\n"
     "int main(int argc, char* argv[])\n"
     "#endif\n"
-    "{ return argc-1;}\n")
-  TRY_COMPILE(CMAKE_C_COMPILER_WORKS ${CMAKE_BINARY_DIR} 
+    "{ (void)argv; return argc-1;}\n")
+  try_compile(CMAKE_C_COMPILER_WORKS ${CMAKE_BINARY_DIR}
     ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/testCCompiler.c
-    OUTPUT_VARIABLE OUTPUT) 
-  SET(C_TEST_WAS_RUN 1)
-ENDIF(NOT CMAKE_C_COMPILER_WORKS)
+    OUTPUT_VARIABLE __CMAKE_C_COMPILER_OUTPUT)
+  # Move result from cache to normal variable.
+  set(CMAKE_C_COMPILER_WORKS ${CMAKE_C_COMPILER_WORKS})
+  unset(CMAKE_C_COMPILER_WORKS CACHE)
+  set(C_TEST_WAS_RUN 1)
+  __TestCompiler_restoreTryCompileTargetType()
+endif()
 
-IF(NOT CMAKE_C_COMPILER_WORKS)
-  MESSAGE(STATUS "Check for working C compiler: ${CMAKE_C_COMPILER} -- broken")
-  FILE(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
+if(NOT CMAKE_C_COMPILER_WORKS)
+  PrintTestCompilerStatus("C" " -- broken")
+  file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
     "Determining if the C compiler works failed with "
-    "the following output:\n${OUTPUT}\n\n")
-  MESSAGE(FATAL_ERROR "The C compiler \"${CMAKE_C_COMPILER}\" "
+    "the following output:\n${__CMAKE_C_COMPILER_OUTPUT}\n\n")
+  string(REPLACE "\n" "\n  " _output "${__CMAKE_C_COMPILER_OUTPUT}")
+  message(FATAL_ERROR "The C compiler\n  \"${CMAKE_C_COMPILER}\"\n"
     "is not able to compile a simple test program.\nIt fails "
-    "with the following output:\n ${OUTPUT}\n\n"
+    "with the following output:\n  ${_output}\n\n"
     "CMake will not be able to correctly generate this project.")
-ELSE(NOT CMAKE_C_COMPILER_WORKS)
-  IF(C_TEST_WAS_RUN)
-    MESSAGE(STATUS "Check for working C compiler: ${CMAKE_C_COMPILER} -- works")
-    FILE(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+else()
+  if(C_TEST_WAS_RUN)
+    PrintTestCompilerStatus("C" " -- works")
+    file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
       "Determining if the C compiler works passed with "
-      "the following output:\n${OUTPUT}\n\n") 
-  ENDIF(C_TEST_WAS_RUN)
-  INCLUDE (${CMAKE_ROOT}/Modules/CheckTypeSize.cmake)
-  # Check the size of void*.  This used to be "void *" but icc expands the *.
-  CHECK_TYPE_SIZE("void*"  CMAKE_SIZEOF_VOID_P)
-  SET(CMAKE_C_COMPILER_WORKS 1 CACHE INTERNAL "")
-  # re-configure this file CMakeCCompiler.cmake so that it gets
-  # the value for CMAKE_SIZEOF_VOID_P
-  # configure variables set in this file for fast reload later on
-  CONFIGURE_FILE(${CMAKE_ROOT}/Modules/CMakeCCompiler.cmake.in 
-    ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeCCompiler.cmake IMMEDIATE)
-ENDIF(NOT CMAKE_C_COMPILER_WORKS)
+      "the following output:\n${__CMAKE_C_COMPILER_OUTPUT}\n\n")
+  endif()
 
+  # Try to identify the ABI and configure it into CMakeCCompiler.cmake
+  include(${CMAKE_ROOT}/Modules/CMakeDetermineCompilerABI.cmake)
+  CMAKE_DETERMINE_COMPILER_ABI(C ${CMAKE_ROOT}/Modules/CMakeCCompilerABI.c)
+  # Try to identify the compiler features
+  include(${CMAKE_ROOT}/Modules/CMakeDetermineCompileFeatures.cmake)
+  CMAKE_DETERMINE_COMPILE_FEATURES(C)
+
+  # Re-configure to save learned information.
+  configure_file(
+    ${CMAKE_ROOT}/Modules/CMakeCCompiler.cmake.in
+    ${CMAKE_PLATFORM_INFO_DIR}/CMakeCCompiler.cmake
+    @ONLY
+    )
+  include(${CMAKE_PLATFORM_INFO_DIR}/CMakeCCompiler.cmake)
+
+  if(CMAKE_C_SIZEOF_DATA_PTR)
+    foreach(f ${CMAKE_C_ABI_FILES})
+      include(${f})
+    endforeach()
+    unset(CMAKE_C_ABI_FILES)
+  endif()
+endif()
+
+set(CMAKE_TRY_COMPILE_TARGET_TYPE ${__CMAKE_SAVED_TRY_COMPILE_TARGET_TYPE})
+unset(__CMAKE_SAVED_TRY_COMPILE_TARGET_TYPE)
+unset(__CMAKE_C_COMPILER_OUTPUT)

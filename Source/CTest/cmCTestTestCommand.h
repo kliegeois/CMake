@@ -1,23 +1,16 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestTestCommand_h
 #define cmCTestTestCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmCTestHandlerCommand.h"
+
+#include <string>
+
+class cmCTestGenericHandler;
+class cmCommand;
 
 /** \class cmCTestTest
  * \brief Run a ctest script
@@ -27,59 +20,48 @@
 class cmCTestTestCommand : public cmCTestHandlerCommand
 {
 public:
-
   cmCTestTestCommand();
 
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone()
-    {
+  cmCommand* Clone() override
+  {
     cmCTestTestCommand* ni = new cmCTestTestCommand;
     ni->CTest = this->CTest;
     ni->CTestScriptHandler = this->CTestScriptHandler;
     return ni;
-    }
+  }
 
   /**
    * The name of the command as specified in CMakeList.txt.
    */
-  virtual const char* GetName() { return "CTEST_TEST";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation()
-    {
-    return "Tests the repository.";
-    }
-
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_TEST([BUILD build_dir] [RETURN_VALUE res])\n"
-      "Tests the given build directory and stores results in Test.xml. The "
-      "second argument is a variable that will hold value.";
-    }
-
-  cmTypeMacro(cmCTestTestCommand, cmCTestHandlerCommand);
+  std::string GetName() const override { return "ctest_test"; }
 
 protected:
   virtual cmCTestGenericHandler* InitializeActualHandler();
-  cmCTestGenericHandler* InitializeHandler();
+  cmCTestGenericHandler* InitializeHandler() override;
 
-  enum {
+  enum
+  {
     ctt_BUILD = ct_LAST,
     ctt_RETURN_VALUE,
     ctt_START,
     ctt_END,
     ctt_STRIDE,
+    ctt_EXCLUDE,
+    ctt_INCLUDE,
+    ctt_EXCLUDE_LABEL,
+    ctt_INCLUDE_LABEL,
+    ctt_EXCLUDE_FIXTURE,
+    ctt_EXCLUDE_FIXTURE_SETUP,
+    ctt_EXCLUDE_FIXTURE_CLEANUP,
+    ctt_PARALLEL_LEVEL,
+    ctt_SCHEDULE_RANDOM,
+    ctt_STOP_TIME,
+    ctt_TEST_LOAD,
     ctt_LAST
   };
 };
-
 
 #endif

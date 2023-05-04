@@ -1,31 +1,24 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmHexFileConverter_h
 #define cmHexFileConverter_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 /** \class cmHexFileConverter
- * \brief Can detects Intel Hex and Motorola S-record files and convert them 
+ * \brief Can detects Intel Hex and Motorola S-record files and convert them
  *        to binary files.
  *
  */
 class cmHexFileConverter
 {
 public:
-  enum FileType {Binary, IntelHex, MotorolaSrec};
+  enum FileType
+  {
+    Binary,
+    IntelHex,
+    MotorolaSrec
+  };
   static FileType DetermineFileType(const char* inFileName);
   static bool TryConvert(const char* inFileName, const char* outFileName);
 };

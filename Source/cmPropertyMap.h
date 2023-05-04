@@ -1,45 +1,29 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmPropertyMap_h
 #define cmPropertyMap_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmProperty.h"
 
-class cmake;
+#include <map>
+#include <string>
+#include <vector>
 
-class cmPropertyMap : public std::map<cmStdString,cmProperty>
+class cmPropertyMap : public std::map<std::string, cmProperty>
 {
 public:
-  cmProperty *GetOrCreateProperty(const char *name);
+  cmProperty* GetOrCreateProperty(const std::string& name);
 
-  void SetProperty(const char *name, const char *value, 
-                   cmProperty::ScopeType scope);
+  std::vector<std::string> GetPropertyList() const;
 
-  const char *GetPropertyValue(const char *name, 
-                               cmProperty::ScopeType scope,
-                               bool &chain) const;
+  void SetProperty(const std::string& name, const char* value);
 
-  void SetCMakeInstance(cmake *cm) { this->CMakeInstance = cm; };
+  void AppendProperty(const std::string& name, const char* value,
+                      bool asString = false);
 
-  cmPropertyMap() { this->CMakeInstance = 0;};
-
-private:
-  cmake *CMakeInstance;
+  const char* GetPropertyValue(const std::string& name) const;
 };
 
 #endif
-

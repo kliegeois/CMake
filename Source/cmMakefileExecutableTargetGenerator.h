@@ -1,36 +1,32 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmMakefileExecutableTargetGenerator_h
 #define cmMakefileExecutableTargetGenerator_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+
 #include "cmMakefileTargetGenerator.h"
 
-class cmMakefileExecutableTargetGenerator: public cmMakefileTargetGenerator
+class cmGeneratorTarget;
+
+class cmMakefileExecutableTargetGenerator : public cmMakefileTargetGenerator
 {
 public:
-  cmMakefileExecutableTargetGenerator();
+  cmMakefileExecutableTargetGenerator(cmGeneratorTarget* target);
+  ~cmMakefileExecutableTargetGenerator() override;
 
   /* the main entry point for this class. Writes the Makefiles associated
      with this target */
-  virtual void WriteRuleFiles();
-  
+  void WriteRuleFiles() override;
+
 protected:
   virtual void WriteExecutableRule(bool relink);
-  
+  virtual void WriteDeviceExecutableRule(bool relink);
+
+private:
+  std::string DeviceLinkObject;
 };
 
 #endif

@@ -1,66 +1,58 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmMakefileTargetGenerator_h
 #define cmMakefileTargetGenerator_h
 
-#include "cmLocalUnixMakefileGenerator3.h"
+#include "cmConfigure.h" // IWYU pragma: keep
 
-class cmCustomCommand;
-class cmDependInformation;
-class cmDepends;
+#include <iosfwd>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "cmCommonTargetGenerator.h"
+#include "cmGeneratorTarget.h"
+#include "cmLocalUnixMakefileGenerator3.h"
+#include "cmOSXBundleGenerator.h"
+
+class cmCustomCommandGenerator;
 class cmGeneratedFileStream;
 class cmGlobalUnixMakefileGenerator3;
-class cmLocalUnixMakefileGenerator3;
-class cmMakefile;
-class cmTarget;
+class cmLinkLineComputer;
+class cmOutputConverter;
 class cmSourceFile;
+class cmStateDirectory;
 
 /** \class cmMakefileTargetGenerator
  * \brief Support Routines for writing makefiles
  *
  */
-class cmMakefileTargetGenerator
+class cmMakefileTargetGenerator : public cmCommonTargetGenerator
 {
 public:
   // constructor to set the ivars
-  cmMakefileTargetGenerator();
-  virtual ~cmMakefileTargetGenerator() {};
+  cmMakefileTargetGenerator(cmGeneratorTarget* target);
+  ~cmMakefileTargetGenerator() override;
 
   // construct using this factory call
-  static cmMakefileTargetGenerator *New(cmLocalUnixMakefileGenerator3 *lg,
-                                        cmStdString tgtName,
-                                        cmTarget *tgt);
+  static cmMakefileTargetGenerator* New(cmGeneratorTarget* tgt);
 
   /* the main entry point for this class. Writes the Makefiles associated
      with this target */
   virtual void WriteRuleFiles() = 0;
 
-  /* the main entry point for this class. Writes the Makefiles associated
-     with this target */
-  virtual void WriteProgressVariables(unsigned long total, 
-                                      unsigned long &current);
-  
   /* return the number of actions that have progress reporting on them */
-  virtual unsigned long GetNumberOfProgressActions() {
-    return this->NumberOfProgressActions;}
+  virtual unsigned long GetNumberOfProgressActions()
+  {
+    return this->NumberOfProgressActions;
+  }
+  std::string GetProgressFileNameFull() { return this->ProgressFileNameFull; }
 
-  const char *GetTargetName() { return this->TargetName.c_str(); }
-  cmTarget* GetTarget() { return this->Target;}
+  cmGeneratorTarget* GetGeneratorTarget() { return this->GeneratorTarget; }
+
 protected:
+  void GetTargetLinkFlags(std::string& flags, const std::string& linkLanguage);
 
   // create the file and directory etc
   void CreateRuleFile();
@@ -73,77 +65,120 @@ protected:
   void WriteCommonCodeRules();
   void WriteTargetLanguageFlags();
 
-  // write the provide require rules for this target
-  void WriteTargetRequiresRules();
-
   // write the clean rules for this target
   void WriteTargetCleanRules();
 
   // write the depend rules for this target
   void WriteTargetDependRules();
 
+  // write rules for macOS Application Bundle content.
+  struct MacOSXContentGeneratorType
+    : cmOSXBundleGenerator::MacOSXContentGeneratorType
+  {
+    MacOSXContentGeneratorType(cmMakefileTargetGenerator* gen)
+      : Generator(gen)
+    {
+    }
+
+    void operator()(cmSourceFile const& source, const char* pkgloc) override;
+
+  private:
+    cmMakefileTargetGenerator* Generator;
+  };
+  friend struct MacOSXContentGeneratorType;
+
   // write the rules for an object
-  void WriteObjectRuleFiles(cmSourceFile& source);
+  void WriteObjectRuleFiles(cmSourceFile const& source);
 
   // write the build rule for an object
-  void WriteObjectBuildFile(std::string &obj,
-                            const char *lang,
-                            cmSourceFile& source,
+  void WriteObjectBuildFile(std::string& obj, const std::string& lang,
+                            cmSourceFile const& source,
                             std::vector<std::string>& depends);
 
   // write the depend.make file for an object
-  void WriteObjectDependRules(cmSourceFile& source,
+  void WriteObjectDependRules(cmSourceFile const& source,
                               std::vector<std::string>& depends);
 
   // write the build rule for a custom command
-  void GenerateCustomRuleFile(const cmCustomCommand& cc);
+  void GenerateCustomRuleFile(cmCustomCommandGenerator const& ccg);
 
   // write a rule to drive building of more than one output from
   // another rule
   void GenerateExtraOutput(const char* out, const char* in,
                            bool symbolic = false);
 
+  void MakeEchoProgress(cmLocalUnixMakefileGenerator3::EchoProgress&) const;
+
   // write out the variable that lists the objects for this target
   void WriteObjectsVariable(std::string& variableName,
-                            std::string& variableNameExternal);
-  void WriteObjectsString(std::string& buildObjs);
+                            std::string& variableNameExternal,
+                            bool useWatcomQuote);
+  void WriteObjectsStrings(std::vector<std::string>& objStrings,
+                           std::string::size_type limit = std::string::npos);
 
   // write the driver rule to build target outputs
-  void WriteTargetDriverRule(const char* main_output, bool relink);
+  void WriteTargetDriverRule(const std::string& main_output, bool relink);
 
   void DriveCustomCommands(std::vector<std::string>& depends);
-
-  // Return the a string with -F flags on apple
-  std::string GetFrameworkFlags();
 
   // append intertarget dependencies
   void AppendTargetDepends(std::vector<std::string>& depends);
 
-  /** In order to support parallel builds for custom commands with
-      multiple outputs the outputs are given a serial order, and only
-      the first output actually has the build rule.  Other outputs
-      just depend on the first one.  The check-build-system step must
-      remove a dependee if the depender is missing to make sure both
-      are regenerated properly.  This method is used by the local
-      makefile generators to register such pairs.  */
-  void AddMultipleOutputPair(const char* depender, const char* dependee);
+  // Append object file dependencies.
+  void AppendObjectDepends(std::vector<std::string>& depends);
+
+  // Append link rule dependencies (objects, etc.).
+  void AppendLinkDepends(std::vector<std::string>& depends,
+                         const std::string& linkLanguage);
+
+  // Lookup the link rule for this target.
+  std::string GetLinkRule(const std::string& linkRuleVar);
 
   /** Create a script to hold link rules and a command to invoke the
       script at build time.  */
   void CreateLinkScript(const char* name,
                         std::vector<std::string> const& link_commands,
-                        std::vector<std::string>& makefile_commands);
+                        std::vector<std::string>& makefile_commands,
+                        std::vector<std::string>& makefile_depends);
+
+  cmLinkLineComputer* CreateLinkLineComputer(
+    cmOutputConverter* outputConverter, cmStateDirectory const& stateDir);
+
+  /** Create a response file with the given set of options.  Returns
+      the relative path from the target build working directory to the
+      response file name.  */
+  std::string CreateResponseFile(const char* name, std::string const& options,
+                                 std::vector<std::string>& makefile_depends);
+
+  bool CheckUseResponseFileForObjects(std::string const& l) const;
+  bool CheckUseResponseFileForLibraries(std::string const& l) const;
+
+  /** Create list of flags for link libraries. */
+  void CreateLinkLibs(cmLinkLineComputer* linkLineComputer,
+                      std::string& linkLibs, bool useResponseFile,
+                      std::vector<std::string>& makefile_depends);
+
+  /** Create lists of object files for linking and cleaning.  */
+  void CreateObjectLists(bool useLinkScript, bool useArchiveRules,
+                         bool useResponseFile, std::string& buildObjs,
+                         std::vector<std::string>& makefile_depends,
+                         bool useWatcomQuote);
+
+  /** Add commands for generate def files */
+  void GenDefFile(std::vector<std::string>& real_link_commands);
+
+  void AddIncludeFlags(std::string& flags, const std::string& lang) override;
 
   virtual void CloseFileStreams();
-  void RemoveForbiddenFlags(const char* flagVar, const char* linkLang,
-                            std::string& linkFlags);
-  cmStdString TargetName;
-  cmTarget *Target;
-  cmLocalUnixMakefileGenerator3 *LocalGenerator;
-  cmGlobalUnixMakefileGenerator3 *GlobalGenerator;
-  cmMakefile *Makefile;
+  cmLocalUnixMakefileGenerator3* LocalGenerator;
+  cmGlobalUnixMakefileGenerator3* GlobalGenerator;
 
-  enum CustomCommandDriveType { OnBuild, OnDepends, OnUtility };
+  enum CustomCommandDriveType
+  {
+    OnBuild,
+    OnDepends,
+    OnUtility
+  };
   CustomCommandDriveType CustomCommandDriver;
 
   // the full path to the build file
@@ -151,59 +186,57 @@ protected:
   std::string BuildFileNameFull;
 
   // the full path to the progress file
-  std::string ProgressFileName;
   std::string ProgressFileNameFull;
   unsigned long NumberOfProgressActions;
+  bool NoRuleMessages;
 
   // the path to the directory the build file is in
   std::string TargetBuildDirectory;
   std::string TargetBuildDirectoryFull;
 
   // the stream for the build file
-  cmGeneratedFileStream *BuildFileStream;
+  cmGeneratedFileStream* BuildFileStream;
 
   // the stream for the flag file
   std::string FlagFileNameFull;
-  cmGeneratedFileStream *FlagFileStream;
+  cmGeneratedFileStream* FlagFileStream;
+  class StringList : public std::vector<std::string>
+  {
+  };
+  std::map<std::string, StringList> FlagFileDepends;
 
   // the stream for the info file
   std::string InfoFileNameFull;
-  cmGeneratedFileStream *InfoFileStream;
+  cmGeneratedFileStream* InfoFileStream;
 
   // files to clean
-  std::vector<std::string> CleanFiles;
+  std::set<std::string> CleanFiles;
 
   // objects used by this target
   std::vector<std::string> Objects;
   std::vector<std::string> ExternalObjects;
-  std::set<std::string> ExtraContent;
 
   // Set of object file names that will be built in this directory.
-  std::set<cmStdString> ObjectFiles;
+  std::set<std::string> ObjectFiles;
 
-  typedef std::map<cmStdString, cmStdString> MultipleOutputPairsType;
+  // Set of extra output files to be driven by the build.
+  std::set<std::string> ExtraFiles;
+
+  typedef std::map<std::string, std::string> MultipleOutputPairsType;
   MultipleOutputPairsType MultipleOutputPairs;
+  bool WriteMakeRule(std::ostream& os, const char* comment,
+                     const std::vector<std::string>& outputs,
+                     const std::vector<std::string>& depends,
+                     const std::vector<std::string>& commands,
+                     bool in_help = false);
 
-  // Target-wide Fortran module output directory.
-  bool FortranModuleDirectoryComputed;
-  std::string FortranModuleDirectory;
-  const char* GetFortranModuleDirectory();
+  // Target name info.
+  cmGeneratorTarget::Names TargetNames;
 
-  // Compute target-specific Fortran language flags.
-  void AddFortranFlags(std::string& flags);
-
-  //==================================================================
-  // Convenience routines that do nothing more than forward to
-  // implementaitons
-  std::string Convert(const char* source,
-                      cmLocalGenerator::RelativeRoot relative,
-                      cmLocalGenerator::OutputFormat output =
-                      cmLocalGenerator::UNCHANGED,
-                      bool optional = false)
-  {
-    return this->LocalGenerator->Convert(source, relative, output, optional);
-  }
-
+  // macOS content info.
+  std::set<std::string> MacContentFolders;
+  std::unique_ptr<cmOSXBundleGenerator> OSXBundleGenerator;
+  MacOSXContentGeneratorType* MacOSXContentGenerator;
 };
 
 #endif

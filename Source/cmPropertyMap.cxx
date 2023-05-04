@@ -1,102 +1,63 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmPropertyMap.h"
-#include "cmSystemTools.h"
-#include "cmake.h"
 
-cmProperty *cmPropertyMap::GetOrCreateProperty(const char *name)
+#include <algorithm>
+#include <assert.h>
+#include <utility>
+
+cmProperty* cmPropertyMap::GetOrCreateProperty(const std::string& name)
 {
   cmPropertyMap::iterator it = this->find(name);
-  cmProperty *prop;
-  if (it == this->end())
-    {
+  cmProperty* prop;
+  if (it == this->end()) {
     prop = &(*this)[name];
-    }
-  else
-    {
+  } else {
     prop = &(it->second);
-    }
+  }
   return prop;
 }
 
-void cmPropertyMap::SetProperty(const char *name, const char *value,
-                                cmProperty::ScopeType scope)
+std::vector<std::string> cmPropertyMap::GetPropertyList() const
 {
-  if (!name)
-    {
-    return;
-    }
-  if(!value)
-    {
+  std::vector<std::string> keyList;
+  for (auto const& i : *this) {
+    keyList.push_back(i.first);
+  }
+  std::sort(keyList.begin(), keyList.end());
+  return keyList;
+}
+
+void cmPropertyMap::SetProperty(const std::string& name, const char* value)
+{
+  if (!value) {
     this->erase(name);
     return;
-    }
-#ifdef CMAKE_STRICT
-  if (!this->CMakeInstance)
-    {
-    cmSystemTools::Error("CMakeInstance not set on a property map!"); 
-    abort();
-    }
-  else
-    {
-    this->CMakeInstance->RecordPropertyAccess(name,scope);
-    }
-#else
-  (void)scope;
-#endif
+  }
 
-  cmProperty *prop = this->GetOrCreateProperty(name);
-  prop->Set(name,value);
+  cmProperty* prop = this->GetOrCreateProperty(name);
+  prop->Set(value);
 }
 
-const char *cmPropertyMap
-::GetPropertyValue(const char *name, 
-                   cmProperty::ScopeType scope, 
-                   bool &chain) const
-{ 
-  chain = false;
-  if (!name)
-    {
-    return 0;
-    }
+void cmPropertyMap::AppendProperty(const std::string& name, const char* value,
+                                   bool asString)
+{
+  // Skip if nothing to append.
+  if (!value || !*value) {
+    return;
+  }
 
-  // has the property been defined?
-#ifdef CMAKE_STRICT
-  if (!this->CMakeInstance)
-    {
-    cmSystemTools::Error("CMakeInstance not set on a property map!"); 
-    abort();
-    }
-  else
-    {
-    this->CMakeInstance->RecordPropertyAccess(name,scope);
-    }
-#endif
+  cmProperty* prop = this->GetOrCreateProperty(name);
+  prop->Append(value, asString);
+}
+
+const char* cmPropertyMap::GetPropertyValue(const std::string& name) const
+{
+  assert(!name.empty());
 
   cmPropertyMap::const_iterator it = this->find(name);
-  if (it == this->end())
-    {
-    // should we chain up?
-    if (this->CMakeInstance)
-      {
-      chain = this->CMakeInstance->IsPropertyChained(name,scope);
-      }
-    return 0;
-    }
+  if (it == this->end()) {
+    return nullptr;
+  }
   return it->second.GetValue();
 }
-

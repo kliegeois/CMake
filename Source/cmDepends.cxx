@@ -1,234 +1,255 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmDepends.h"
 
+#include "cmFileTime.h"
+#include "cmFileTimeCache.h"
+#include "cmGeneratedFileStream.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
-#include "cmGeneratedFileStream.h"
 #include "cmSystemTools.h"
-#include "cmFileTimeComparison.h"
-#include <string.h>
 
-//----------------------------------------------------------------------------
-cmDepends::cmDepends():
-  CompileDirectory(),
-  LocalGenerator(0),
-  Verbose(false),
-  FileComparison(0),
-  MaxPath(cmSystemTools::GetMaximumFilePathLength()),
-  Dependee(new char[MaxPath]),
-  Depender(new char[MaxPath])
+#include "cmsys/FStream.hxx"
+#include <sstream>
+#include <utility>
+
+cmDepends::cmDepends(cmLocalGenerator* lg, std::string targetDir)
+  : LocalGenerator(lg)
+  , TargetDirectory(std::move(targetDir))
 {
 }
 
-//----------------------------------------------------------------------------
-cmDepends::~cmDepends()
-{
-  delete [] this->Dependee;
-  delete [] this->Depender;
-}
+cmDepends::~cmDepends() = default;
 
-//----------------------------------------------------------------------------
-bool cmDepends::Write(std::ostream &makeDepends,
-                      std::ostream &internalDepends)
+bool cmDepends::Write(std::ostream& makeDepends, std::ostream& internalDepends)
 {
-  // Lookup the set of sources to scan.
-  std::string srcLang = "CMAKE_DEPENDS_CHECK_";
-  srcLang += this->Language;
-  cmMakefile* mf = this->LocalGenerator->GetMakefile();
-  const char* srcStr = mf->GetSafeDefinition(srcLang.c_str());
-  std::vector<std::string> pairs;
-  cmSystemTools::ExpandListArgument(srcStr, pairs);
-
-  for(std::vector<std::string>::iterator si = pairs.begin();
-      si != pairs.end();)
+  std::map<std::string, std::set<std::string>> dependencies;
+  {
+    // Lookup the set of sources to scan.
+    std::vector<std::string> pairs;
     {
-    // Get the source and object file.
-    std::string const& src = *si++;
-    if(si == pairs.end()) { break; }
-    std::string obj = *si++;
-
-    // Make sure the object file is relative to the top of the build tree.
-    obj = this->LocalGenerator->Convert(obj.c_str(),
-                                        cmLocalGenerator::HOME_OUTPUT,
-                                        cmLocalGenerator::MAKEFILE);
-
-    // Write the dependencies for this pair.
-    if(!this->WriteDependencies(src.c_str(), obj.c_str(),
-                                makeDepends, internalDepends))
-      {
-      return false;
-      }
+      std::string const srcLang = "CMAKE_DEPENDS_CHECK_" + this->Language;
+      cmMakefile* mf = this->LocalGenerator->GetMakefile();
+      cmSystemTools::ExpandListArgument(mf->GetSafeDefinition(srcLang), pairs);
     }
+    for (std::vector<std::string>::iterator si = pairs.begin();
+         si != pairs.end();) {
+      // Get the source and object file.
+      std::string const& src = *si++;
+      if (si == pairs.end()) {
+        break;
+      }
+      std::string const& obj = *si++;
+      dependencies[obj].insert(src);
+    }
+  }
+  for (auto const& d : dependencies) {
+    // Write the dependencies for this pair.
+    if (!this->WriteDependencies(d.second, d.first, makeDepends,
+                                 internalDepends)) {
+      return false;
+    }
+  }
 
   return this->Finalize(makeDepends, internalDepends);
 }
 
-//----------------------------------------------------------------------------
-bool cmDepends::Finalize(std::ostream&,
-                         std::ostream&)
+bool cmDepends::Finalize(std::ostream& /*unused*/, std::ostream& /*unused*/)
 {
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmDepends::Check(const char *makeFile, const char *internalFile)
+bool cmDepends::Check(const std::string& makeFile,
+                      const std::string& internalFile,
+                      DependencyMap& validDeps)
 {
-  // Dependency checks must be done in proper working directory.
-  std::string oldcwd = ".";
-  if(this->CompileDirectory != ".")
-    {
-    // Get the CWD but do not call CollapseFullPath because
-    // we only need it to cd back, and the form does not matter
-    oldcwd = cmSystemTools::GetCurrentWorkingDirectory(false);
-    cmSystemTools::ChangeDirectory(this->CompileDirectory.c_str());
-    }
-
   // Check whether dependencies must be regenerated.
   bool okay = true;
-  std::ifstream fin(internalFile);
-  if(!(fin && this->CheckDependencies(fin)))
-    {
+  cmsys::ifstream fin(internalFile.c_str());
+  if (!(fin && this->CheckDependencies(fin, internalFile, validDeps))) {
     // Clear all dependencies so they will be regenerated.
     this->Clear(makeFile);
     cmSystemTools::RemoveFile(internalFile);
+    this->FileTimeCache->Remove(internalFile);
     okay = false;
-    }
-
-  // Restore working directory.
-  if(oldcwd != ".")
-    {
-    cmSystemTools::ChangeDirectory(oldcwd.c_str());
-    }
-
+  }
   return okay;
 }
 
-//----------------------------------------------------------------------------
-void cmDepends::Clear(const char *file)
+void cmDepends::Clear(const std::string& file)
 {
   // Print verbose output.
-  if(this->Verbose)
-    {
-    cmOStringStream msg;
+  if (this->Verbose) {
+    std::ostringstream msg;
     msg << "Clearing dependencies in \"" << file << "\"." << std::endl;
-    cmSystemTools::Stdout(msg.str().c_str());
-    }
+    cmSystemTools::Stdout(msg.str());
+  }
 
   // Write an empty dependency file.
   cmGeneratedFileStream depFileStream(file);
-  depFileStream
-    << "# Empty dependencies file\n"
-    << "# This may be replaced when dependencies are built." << std::endl;
+  depFileStream << "# Empty dependencies file\n"
+                << "# This may be replaced when dependencies are built."
+                << std::endl;
 }
 
-//----------------------------------------------------------------------------
-bool cmDepends::WriteDependencies(const char*, const char*,
-                                  std::ostream&, std::ostream&)
+bool cmDepends::WriteDependencies(const std::set<std::string>& /*unused*/,
+                                  const std::string& /*unused*/,
+                                  std::ostream& /*unused*/,
+                                  std::ostream& /*unused*/)
 {
   // This should be implemented by the subclass.
   return false;
 }
 
-//----------------------------------------------------------------------------
-bool cmDepends::CheckDependencies(std::istream& internalDepends)
+bool cmDepends::CheckDependencies(std::istream& internalDepends,
+                                  const std::string& internalDependsFileName,
+                                  DependencyMap& validDeps)
 {
+  // Read internal depends file time
+  cmFileTime internalDependsTime;
+  if (!this->FileTimeCache->Load(internalDependsFileName,
+                                 internalDependsTime)) {
+    return false;
+  }
+
   // Parse dependencies from the stream.  If any dependee is missing
   // or newer than the depender then dependencies should be
   // regenerated.
   bool okay = true;
-  while(internalDepends.getline(this->Dependee, this->MaxPath))
-    {
-    if ( this->Dependee[0] == 0 || this->Dependee[0] == '#' || 
-         this->Dependee[0] == '\r' )
-      {
-      continue;
-      }
-    size_t len = internalDepends.gcount()-1;
-    if ( this->Dependee[len-1] == '\r' )
-      {
-      len --;
-      this->Dependee[len] = 0;
-      }
-    if ( this->Dependee[0] != ' ' )
-      {
-      memcpy(this->Depender, this->Dependee, len+1);
-      continue;
-      }
-    /*
-    // Parse the dependency line.
-    if(!this->ParseDependency(line.c_str()))
-      {
-      continue;
-      }
-      */
+  bool dependerExists = false;
 
-    // Dependencies must be regenerated if the dependee does not exist
-    // or if the depender exists and is older than the dependee.
+  std::string line;
+  line.reserve(1024);
+  std::string depender;
+  std::string dependee;
+  cmFileTime dependerTime;
+  cmFileTime dependeeTime;
+  std::vector<std::string>* currentDependencies = nullptr;
+
+  while (std::getline(internalDepends, line)) {
+    // Check if this an empty or a comment line
+    if (line.empty() || line.front() == '#') {
+      continue;
+    }
+    // Drop carriage return character at the end
+    if (line.back() == '\r') {
+      line.pop_back();
+      if (line.empty()) {
+        continue;
+      }
+    }
+    // Check if this a depender line
+    if (line.front() != ' ') {
+      depender = line;
+      dependerExists = this->FileTimeCache->Load(depender, dependerTime);
+      // If we erase validDeps[this->Depender] by overwriting it with an empty
+      // vector, we lose dependencies for dependers that have multiple
+      // entries. No need to initialize the entry, std::map will do so on first
+      // access.
+      currentDependencies = &validDeps[depender];
+      continue;
+    }
+
+    // This is a dependee line
+    dependee = line.substr(1);
+
+    // Add dependee to depender's list
+    if (currentDependencies != nullptr) {
+      currentDependencies->push_back(dependee);
+    }
+
+    // Dependencies must be regenerated
+    // * if the dependee does not exist
+    // * if the depender exists and is older than the dependee.
+    // * if the depender does not exist, but the dependee is newer than the
+    //   depends file
     bool regenerate = false;
-    const char* dependee = this->Dependee+1;
-    const char* depender = this->Depender;
-    if(!cmSystemTools::FileExists(dependee))
-      {
+    bool dependeeExists = this->FileTimeCache->Load(dependee, dependeeTime);
+    if (!dependeeExists) {
       // The dependee does not exist.
       regenerate = true;
 
       // Print verbose output.
-      if(this->Verbose)
-        {
-        cmOStringStream msg;
-        msg << "Dependee \"" << dependee
-            << "\" does not exist for depender \""
+      if (this->Verbose) {
+        std::ostringstream msg;
+        msg << "Dependee \"" << dependee << "\" does not exist for depender \""
             << depender << "\"." << std::endl;
-        cmSystemTools::Stdout(msg.str().c_str());
-        }
+        cmSystemTools::Stdout(msg.str());
       }
-    else if(cmSystemTools::FileExists(depender))
-      {
+    } else if (dependerExists) {
       // The dependee and depender both exist.  Compare file times.
-      int result = 0;
-      if((!this->FileComparison->FileTimeCompare(depender, dependee,
-                                             &result) || result < 0))
-        {
+      if (dependerTime.Older(dependeeTime)) {
         // The depender is older than the dependee.
         regenerate = true;
 
         // Print verbose output.
-        if(this->Verbose)
-          {
-          cmOStringStream msg;
-          msg << "Dependee \"" << dependee
-              << "\" is newer than depender \""
+        if (this->Verbose) {
+          std::ostringstream msg;
+          msg << "Dependee \"" << dependee << "\" is newer than depender \""
               << depender << "\"." << std::endl;
-          cmSystemTools::Stdout(msg.str().c_str());
-          }
+          cmSystemTools::Stdout(msg.str());
         }
       }
-    if(regenerate)
-      {
+    } else {
+      // The dependee exists, but the depender doesn't. Regenerate if the
+      // internalDepends file is older than the dependee.
+      if (internalDependsTime.Older(dependeeTime)) {
+        // The depends-file is older than the dependee.
+        regenerate = true;
+
+        // Print verbose output.
+        if (this->Verbose) {
+          std::ostringstream msg;
+          msg << "Dependee \"" << dependee
+              << "\" is newer than depends file \"" << internalDependsFileName
+              << "\"." << std::endl;
+          cmSystemTools::Stdout(msg.str());
+        }
+      }
+    }
+
+    if (regenerate) {
       // Dependencies must be regenerated.
       okay = false;
 
+      // Remove the information of this depender from the map, it needs
+      // to be rescanned
+      if (currentDependencies != nullptr) {
+        validDeps.erase(depender);
+        currentDependencies = nullptr;
+      }
+
       // Remove the depender to be sure it is rebuilt.
-      cmSystemTools::RemoveFile(depender);
+      if (dependerExists) {
+        cmSystemTools::RemoveFile(depender);
+        this->FileTimeCache->Remove(depender);
+        dependerExists = false;
       }
     }
+  }
 
   return okay;
 }
 
-
+void cmDepends::SetIncludePathFromLanguage(const std::string& lang)
+{
+  // Look for the new per "TARGET_" variant first:
+  const char* includePath = nullptr;
+  std::string includePathVar = "CMAKE_";
+  includePathVar += lang;
+  includePathVar += "_TARGET_INCLUDE_PATH";
+  cmMakefile* mf = this->LocalGenerator->GetMakefile();
+  includePath = mf->GetDefinition(includePathVar);
+  if (includePath) {
+    cmSystemTools::ExpandListArgument(includePath, this->IncludePath);
+  } else {
+    // Fallback to the old directory level variable if no per-target var:
+    includePathVar = "CMAKE_";
+    includePathVar += lang;
+    includePathVar += "_INCLUDE_PATH";
+    includePath = mf->GetDefinition(includePathVar);
+    if (includePath) {
+      cmSystemTools::ExpandListArgument(includePath, this->IncludePath);
+    }
+  }
+}

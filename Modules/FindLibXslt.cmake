@@ -1,45 +1,77 @@
-# - Try to find LibXslt
-# Once done this will define
-#
-#  LIBXSLT_FOUND - system has LibXslt
-#  LIBXSLT_INCLUDE_DIR - the LibXslt include directory
-#  LIBXSLT_LIBRARIES - Link these to LibXslt
-#  LIBXSLT_DEFINITIONS - Compiler switches required for using LibXslt
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-# Copyright (c) 2006, Alexander Neundorf, <neundorf@kde.org>
-#
-# Redistribution and use is allowed according to the terms of the BSD license.
-# For details see the accompanying COPYING-CMAKE-SCRIPTS file.
+#[=======================================================================[.rst:
+FindLibXslt
+-----------
 
+Find the XSL Transformations, Extensible Stylesheet Language
+Transformations (XSLT) library (LibXslt)
 
-IF (LIBXSLT_INCLUDE_DIR AND LIBXSLT_LIBRARIES)
-   # in cache already
-   SET(LibXslt_FIND_QUIETLY TRUE)
-ENDIF (LIBXSLT_INCLUDE_DIR AND LIBXSLT_LIBRARIES)
+Once done this will define
 
-IF (NOT WIN32)
-   # use pkg-config to get the directories and then use these values
-   # in the FIND_PATH() and FIND_LIBRARY() calls
-   INCLUDE(UsePkgConfig)
-   PKGCONFIG(libxslt _LibXsltIncDir _LibXsltLinkDir _LibXsltLinkFlags _LibXsltCflags)
-   SET(LIBXSLT_DEFINITIONS ${_LibXsltCflags})
-ENDIF (NOT WIN32)
+::
 
-FIND_PATH(LIBXSLT_INCLUDE_DIR libxslt/xslt.h
-    ${_LibXsltIncDir}
+  LIBXSLT_FOUND - system has LibXslt
+  LIBXSLT_INCLUDE_DIR - the LibXslt include directory
+  LIBXSLT_LIBRARIES - Link these to LibXslt
+  LIBXSLT_DEFINITIONS - Compiler switches required for using LibXslt
+  LIBXSLT_VERSION_STRING - version of LibXslt found (since CMake 2.8.8)
+
+Additionally, the following two variables are set (but not required
+for using xslt):
+
+``LIBXSLT_EXSLT_LIBRARIES``
+  Link to these if you need to link against the exslt library.
+``LIBXSLT_XSLTPROC_EXECUTABLE``
+  Contains the full path to the xsltproc executable if found.
+#]=======================================================================]
+
+# use pkg-config to get the directories and then use these values
+# in the find_path() and find_library() calls
+find_package(PkgConfig QUIET)
+PKG_CHECK_MODULES(PC_LIBXSLT QUIET libxslt)
+set(LIBXSLT_DEFINITIONS ${PC_LIBXSLT_CFLAGS_OTHER})
+
+find_path(LIBXSLT_INCLUDE_DIR NAMES libxslt/xslt.h
+    HINTS
+   ${PC_LIBXSLT_INCLUDEDIR}
+   ${PC_LIBXSLT_INCLUDE_DIRS}
   )
 
-FIND_LIBRARY(LIBXSLT_LIBRARIES NAMES xslt libxslt
-    PATHS
-    ${_LibXsltLinkDir}
+find_library(LIBXSLT_LIBRARIES NAMES xslt libxslt
+    HINTS
+   ${PC_LIBXSLT_LIBDIR}
+   ${PC_LIBXSLT_LIBRARY_DIRS}
   )
 
-INCLUDE(FindPackageHandleStandardArgs)
+find_library(LIBXSLT_EXSLT_LIBRARY NAMES exslt libexslt
+    HINTS
+    ${PC_LIBXSLT_LIBDIR}
+    ${PC_LIBXSLT_LIBRARY_DIRS}
+  )
 
-# handle the QUIETLY and REQUIRED arguments and set LIBXML2_FOUND to TRUE if 
-# all listed variables are TRUE
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(LibXslt DEFAULT_MSG LIBXSLT_LIBRARIES LIBXSLT_INCLUDE_DIR)
+set(LIBXSLT_EXSLT_LIBRARIES ${LIBXSLT_EXSLT_LIBRARY} )
 
+find_program(LIBXSLT_XSLTPROC_EXECUTABLE xsltproc)
 
-MARK_AS_ADVANCED(LIBXSLT_INCLUDE_DIR LIBXSLT_LIBRARIES)
+if(PC_LIBXSLT_VERSION)
+    set(LIBXSLT_VERSION_STRING ${PC_LIBXSLT_VERSION})
+elseif(LIBXSLT_INCLUDE_DIR AND EXISTS "${LIBXSLT_INCLUDE_DIR}/libxslt/xsltconfig.h")
+    file(STRINGS "${LIBXSLT_INCLUDE_DIR}/libxslt/xsltconfig.h" libxslt_version_str
+         REGEX "^#define[\t ]+LIBXSLT_DOTTED_VERSION[\t ]+\".*\"")
 
+    string(REGEX REPLACE "^#define[\t ]+LIBXSLT_DOTTED_VERSION[\t ]+\"([^\"]*)\".*" "\\1"
+           LIBXSLT_VERSION_STRING "${libxslt_version_str}")
+    unset(libxslt_version_str)
+endif()
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(LibXslt
+                                  REQUIRED_VARS LIBXSLT_LIBRARIES LIBXSLT_INCLUDE_DIR
+                                  VERSION_VAR LIBXSLT_VERSION_STRING)
+
+mark_as_advanced(LIBXSLT_INCLUDE_DIR
+                 LIBXSLT_LIBRARIES
+                 LIBXSLT_EXSLT_LIBRARY
+                 LIBXSLT_XSLTPROC_EXECUTABLE)

@@ -1,63 +1,57 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmPropertyDefinition_h
 #define cmPropertyDefinition_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmProperty.h"
 
-class cmPropertyDefinition 
+#include <string>
+
+/** \class cmPropertyDefinition
+ * \brief Property meta-information
+ *
+ * This class contains the following meta-information about property:
+ * - Name;
+ * - Various documentation strings;
+ * - The scope of the property;
+ * - If the property is chained.
+ */
+class cmPropertyDefinition
 {
 public:
-  // Define this property
-  void DefineProperty(const char *name, cmProperty::ScopeType scope,
-                      const char *ShortDescription,
-                      const char *FullDescription, 
-                      const char *DocumentationSection,
-                      bool chained);
+  /// Define this property
+  void DefineProperty(const std::string& name, cmProperty::ScopeType scope,
+                      const char* ShortDescription,
+                      const char* FullDescription, bool chained);
 
-  // get the documentation string
-  cmDocumentationEntry GetDocumentation() const;
+  /// Default constructor
+  cmPropertyDefinition() { this->Chained = false; }
 
-  // basic constructor 
-  cmPropertyDefinition() { this->Chained = false; };
+  /// Is the property chained?
+  bool IsChained() const { return this->Chained; }
 
-  // is it chained?
-  bool IsChained() {return this->Chained; };
+  /// Get the scope
+  cmProperty::ScopeType GetScope() const { return this->Scope; }
 
-  // Get the section if any
-  const std::string &GetDocumentationSection() const {
-    return this->DocumentationSection; }; 
-  
-  // get the scope
-  cmProperty::ScopeType GetScope() const {
-    return this->Scope; };
+  /// Get the documentation (short version)
+  const std::string& GetShortDescription() const
+  {
+    return this->ShortDescription;
+  }
 
-  // get the docs
-  const std::string &GetShortDescription() const {
-    return this->ShortDescription; }; 
-  const std::string &GetFullDescription() const {
-    return this->FullDescription; }; 
-  
+  /// Get the documentation (full version)
+  const std::string& GetFullDescription() const
+  {
+    return this->FullDescription;
+  }
+
 protected:
   std::string Name;
   std::string ShortDescription;
   std::string FullDescription;
-  std::string DocumentationSection;
-  cmProperty::ScopeType Scope; 
+  cmProperty::ScopeType Scope;
   bool Chained;
 };
 

@@ -1,71 +1,70 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#ifndef QCMake_h
+#define QCMake_h
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include "cmake.h"
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
-#ifndef __QCMake_h
-#define __QCMake_h
 #ifdef _MSC_VER
-#pragma warning ( disable : 4127 )
-#pragma warning ( disable : 4512 )
+#  pragma warning(disable : 4127)
+#  pragma warning(disable : 4512)
 #endif
 
+#include <vector>
+
+#include <QAtomicInt>
+#include <QList>
+#include <QMetaType>
 #include <QObject>
 #include <QString>
-#include <QVariant>
-#include <QList>
 #include <QStringList>
-#include <QMetaType>
+#include <QVariant>
 
-class cmake;
-
-/// struct to represent cache properties in Qt
+/// struct to represent cmake properties in Qt
 /// Value is of type String or Bool
-struct QCMakeCacheProperty
+struct QCMakeProperty
 {
-  enum PropertyType { BOOL, PATH, FILEPATH, STRING };
+  enum PropertyType
+  {
+    BOOL,
+    PATH,
+    FILEPATH,
+    STRING
+  };
   QString Key;
   QVariant Value;
+  QStringList Strings;
   QString Help;
   PropertyType Type;
   bool Advanced;
-  bool operator==(const QCMakeCacheProperty& other) const 
-    { 
+  bool operator==(const QCMakeProperty& other) const
+  {
     return this->Key == other.Key;
-    }
-  bool operator<(const QCMakeCacheProperty& other) const 
-    { 
+  }
+  bool operator<(const QCMakeProperty& other) const
+  {
     return this->Key < other.Key;
-    }
+  }
 };
 
-// make types usable with QVariant
-Q_DECLARE_METATYPE(QCMakeCacheProperty)
-typedef QList<QCMakeCacheProperty> QCMakeCachePropertyList;
-Q_DECLARE_METATYPE(QCMakeCachePropertyList)
+// list of properties
+typedef QList<QCMakeProperty> QCMakePropertyList;
+
+// allow QVariant to be a property or list of properties
+Q_DECLARE_METATYPE(QCMakeProperty)
+Q_DECLARE_METATYPE(QCMakePropertyList)
 
 /// Qt API for CMake library.
-/// Wrapper like class allows for easier integration with 
+/// Wrapper like class allows for easier integration with
 /// Qt features such as, signal/slot connections, multi-threading, etc..
 class QCMake : public QObject
 {
   Q_OBJECT
 public:
-  QCMake(QObject* p=0);
+  QCMake(QObject* p = nullptr);
   ~QCMake();
-
 public slots:
   /// load the cache file in a directory
   void loadCache(const QString& dir);
@@ -75,22 +74,53 @@ public slots:
   void setBinaryDirectory(const QString& dir);
   /// set the desired generator to use
   void setGenerator(const QString& generator);
+  /// set the desired generator to use
+  void setPlatform(const QString& platform);
+  /// set the desired generator to use
+  void setToolset(const QString& toolset);
   /// do the configure step
   void configure();
   /// generate the files
   void generate();
+  /// open the project
+  void open();
   /// set the property values
-  void setProperties(const QCMakeCachePropertyList&);
-  /// interrupt the configure or generate process
+  void setProperties(const QCMakePropertyList&);
+  /// interrupt the configure or generate process (if connecting, make a direct
+  /// connection)
   void interrupt();
   /// delete the cache in binary directory
   void deleteCache();
   /// reload the cache in binary directory
   void reloadCache();
+  /// set whether to do debug output
+  void setDebugOutput(bool);
+  /// get whether to do suppress dev warnings
+  bool getSuppressDevWarnings();
+  /// set whether to do suppress dev warnings
+  void setSuppressDevWarnings(bool value);
+  /// get whether to do suppress deprecated warnings
+  bool getSuppressDeprecatedWarnings();
+  /// set whether to do suppress deprecated warnings
+  void setSuppressDeprecatedWarnings(bool value);
+  /// get whether to treat developer (author) warnings as errors
+  bool getDevWarningsAsErrors();
+  /// set whether to treat developer (author) warnings as errors
+  void setDevWarningsAsErrors(bool value);
+  /// get whether to treat deprecated warnings as errors
+  bool getDeprecatedWarningsAsErrors();
+  /// set whether to treat deprecated warnings as errors
+  void setDeprecatedWarningsAsErrors(bool value);
+  /// set whether to run cmake with warnings about uninitialized variables
+  void setWarnUninitializedMode(bool value);
+  /// set whether to run cmake with warnings about unused variables
+  void setWarnUnusedMode(bool value);
+  /// check if project IDE open is possible and emit openPossible signal
+  void checkOpenPossible();
 
 public:
   /// get the list of cache properties
-  QCMakeCachePropertyList properties() const;
+  QCMakePropertyList properties() const;
   /// get the current binary directory
   QString binaryDirectory() const;
   /// get the current source directory
@@ -98,16 +128,21 @@ public:
   /// get the current generator
   QString generator() const;
   /// get the available generators
-  QStringList availableGenerators() const;
+  std::vector<cmake::GeneratorInfo> const& availableGenerators() const;
+  /// get whether to do debug output
+  bool getDebugOutput() const;
 
 signals:
-  /// signal when properties change (during read from disk or configure process)
-  void propertiesChanged(const QCMakeCachePropertyList& vars);
+  /// signal when properties change (during read from disk or configure
+  /// process)
+  void propertiesChanged(const QCMakePropertyList& vars);
   /// signal when the generator changes
   void generatorChanged(const QString& gen);
   /// signal when the source directory changes (binary directory already
   /// containing a CMakeCache.txt file)
   void sourceDirChanged(const QString& dir);
+  /// signal when the binary directory changes
+  void binaryDirChanged(const QString& dir);
   /// signal for progress events
   void progressChanged(const QString& msg, float percent);
   /// signal when configure is done
@@ -118,20 +153,37 @@ signals:
   void outputMessage(const QString& msg);
   /// signal when there is an error message
   void errorMessage(const QString& msg);
+  /// signal when debug output changes
+  void debugOutputChanged(bool);
+  /// signal when the toolset changes
+  void toolsetChanged(const QString& toolset);
+  /// signal when the platform changes
+  void platformChanged(const QString& platform);
+  /// signal when open is done
+  void openDone(bool successful);
+  /// signal when open is done
+  void openPossible(bool possible);
 
 protected:
   cmake* CMakeInstance;
 
-  static void progressCallback(const char* msg, float percent, void* cd);
-  static void errorCallback(const char* msg, const char* title, 
-                            bool&, void* cd);
+  bool interruptCallback();
+  void progressCallback(std::string const& msg, float percent);
+  void messageCallback(std::string const& msg, const char* title);
+  void stdoutCallback(std::string const& msg);
+  void stderrCallback(std::string const& msg);
 
+  bool WarnUninitializedMode;
+  bool WarnUnusedMode;
+  bool WarnUnusedAllMode;
   QString SourceDirectory;
   QString BinaryDirectory;
   QString Generator;
-  QStringList AvailableGenerators;
+  QString Platform;
+  QString Toolset;
+  std::vector<cmake::GeneratorInfo> AvailableGenerators;
   QString CMakeExecutable;
+  QAtomicInt InterruptFlag;
 };
 
-#endif // __QCMake_h
-
+#endif // QCMake_h

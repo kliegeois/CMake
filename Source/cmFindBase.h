@@ -1,31 +1,22 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmFindBase_h
 #define cmFindBase_h
 
-#include "cmCommand.h"
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
+#include "cmFindCommon.h"
 
 /** \class cmFindBase
- * \brief Define a command to search for an executable program.
+ * \brief Base class for most FIND_XXX commands.
  *
  * cmFindBase is a parent class for cmFindProgramCommand, cmFindPathCommand,
- * and cmFindLibraryCommand, cmFindFile
+ * and cmFindLibraryCommand, cmFindFileCommand
  */
-class cmFindBase : public cmCommand
+class cmFindBase : public cmFindCommon
 {
 public:
   cmFindBase();
@@ -34,67 +25,38 @@ public:
    * the CMakeLists.txt file.
    */
   virtual bool ParseArguments(std::vector<std::string> const& args);
-  cmTypeMacro(cmFindBase, cmCommand);
-  
-  virtual const char* GetFullDocumentation()
-    {return this->GenericDocumentation.c_str();}
 
-  enum RootPathMode { RootPathModeBoth, 
-                      RootPathModeOnlyRootPath, 
-                      RootPathModeNoRootPath };
-  
 protected:
   void PrintFindStuff();
-  void ExpandPaths(std::vector<std::string> userPaths);
-  void HandleCMakeFindRootPath();
-  
-  // add to the SearchPaths
-  void AddPaths(std::vector<std::string>& paths);
-  void AddFrameWorkPaths();
-  void AddAppBundlePaths();
-  void AddEnvironmentVariables();
-  void AddFindPrefix(std::vector<std::string>& dest, 
-                     const std::vector<std::string>& src);
-  void AddCMakeVariables();
-  void AddSystemEnvironmentVariables();
-  void AddCMakeSystemVariables();
-  void ExpandRegistryAndCleanPath(std::vector<std::string>& paths);
+  void ExpandPaths();
+
   // see if the VariableName is already set in the cache,
   // also copy the documentation from the cache to VariableDocumentation
   // if it has documentation in the cache
   bool CheckForVariableInCache();
-  
-  cmStdString GenericDocumentation;
+
   // use by command during find
-  cmStdString VariableDocumentation;
-  cmStdString VariableName;
+  std::string VariableDocumentation;
+  std::string VariableName;
   std::vector<std::string> Names;
-  std::vector<std::string> SearchPaths;
-  std::vector<std::string> SearchPathSuffixes;
+  bool NamesPerDir;
+  bool NamesPerDirAllowed;
 
   // CMAKE_*_PATH CMAKE_SYSTEM_*_PATH FRAMEWORK|LIBRARY|INCLUDE|PROGRAM
-  cmStdString CMakePathName; 
-  cmStdString EnvironmentPath; // LIB,INCLUDE
+  std::string EnvironmentPath; // LIB,INCLUDE
 
   bool AlreadyInCache;
   bool AlreadyInCacheWithoutMetaInfo;
-  bool NoDefaultPath;
-  bool NoCMakePath;
-  bool NoCMakeEnvironmentPath;
-  bool NoSystemEnvironmentPath;
-  bool NoCMakeSystemPath;
-  RootPathMode FindRootPathMode;
-  
-  bool SearchFrameworkFirst;
-  bool SearchFrameworkOnly;
-  bool SearchFrameworkLast;
-  
-  bool SearchAppBundleFirst;
-  bool SearchAppBundleOnly;
-  bool SearchAppBundleLast;
-  
+
+private:
+  // Add pieces of the search.
+  void FillPackageRootPath();
+  void FillCMakeVariablePath();
+  void FillCMakeEnvironmentPath();
+  void FillUserHintsPath();
+  void FillSystemEnvironmentPath();
+  void FillCMakeSystemVariablePath();
+  void FillUserGuessPath();
 };
-
-
 
 #endif

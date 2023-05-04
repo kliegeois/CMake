@@ -1,28 +1,28 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestTestHandler_h
 #define cmCTestTestHandler_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
 
 #include "cmCTestGenericHandler.h"
-#include <cmsys/RegularExpression.hxx>
+#include "cmDuration.h"
+#include "cmListFileCache.h"
 
+#include "cmsys/RegularExpression.hxx"
+#include <chrono>
+#include <cstdint>
+#include <iosfwd>
+#include <map>
+#include <set>
+#include <stddef.h>
+#include <string>
+#include <utility>
+#include <vector>
+
+class cmCTest;
 class cmMakefile;
+class cmXMLWriter;
 
 /** \class cmCTestTestHandler
  * \brief A class that handles ctest -S invocations
@@ -30,35 +30,55 @@ class cmMakefile;
  */
 class cmCTestTestHandler : public cmCTestGenericHandler
 {
+  friend class cmCTestRunTest;
+  friend class cmCTestMultiProcessHandler;
+
 public:
-  cmTypeMacro(cmCTestTestHandler, cmCTestGenericHandler);
+  typedef cmCTestGenericHandler Superclass;
 
   /**
    * The main entry point for this class
    */
-  int ProcessHandler();
+  int ProcessHandler() override;
 
   /**
-   * When both -R and -I are used should te resulting test list be the
+   * When both -R and -I are used should the resulting test list be the
    * intersection or the union of the lists. By default it is the
    * intersection.
    */
   void SetUseUnion(bool val) { this->UseUnion = val; }
 
   /**
+   * Set whether or not CTest should only execute the tests that failed
+   * on the previous run.  By default this is false.
+   */
+  void SetRerunFailed(bool val) { this->RerunFailed = val; }
+
+  /**
    * This method is called when reading CTest custom file
    */
-  void PopulateCustomVectors(cmMakefile *mf);
+  void PopulateCustomVectors(cmMakefile* mf) override;
 
-  ///! Control the use of the regular expresisons, call these methods to turn
-  ///them on
+  //! Control the use of the regular expresisons, call these methods to turn
+  /// them on
   void UseIncludeRegExp();
   void UseExcludeRegExp();
-  void SetIncludeRegExp(const char *);
-  void SetExcludeRegExp(const char *);
+  void SetIncludeRegExp(const char*);
+  void SetExcludeRegExp(const char*);
 
+  void SetMaxIndex(int n) { this->MaxIndex = n; }
+  int GetMaxIndex() { return this->MaxIndex; }
 
-  ///! pass the -I argument down
+  void SetTestOutputSizePassed(int n)
+  {
+    this->CustomMaximumPassedTestOutputSize = n;
+  }
+  void SetTestOutputSizeFailed(int n)
+  {
+    this->CustomMaximumFailedTestOutputSize = n;
+  }
+
+  //! pass the -I argument down
   void SetTestsToRunInformation(const char*);
 
   cmCTestTestHandler();
@@ -73,85 +93,136 @@ public:
    */
   bool SetTestsProperties(const std::vector<std::string>& args);
 
-  void Initialize();
+  /**
+   * Set directory properties
+   */
+  bool SetDirectoryProperties(const std::vector<std::string>& args);
 
+  void Initialize() override;
+
+  // NOTE: This struct is Saved/Restored
+  // in cmCTestTestHandler, if you add to this class
+  // then you must add the new members to that code or
+  // ctest -j N will break for that feature
   struct cmCTestTestProperties
   {
-    cmStdString Name;
-    cmStdString Directory;
+    std::string Name;
+    std::string Directory;
     std::vector<std::string> Args;
-    std::vector<std::pair<cmsys::RegularExpression,
-                          std::string> > ErrorRegularExpressions;
-    std::vector<std::pair<cmsys::RegularExpression,
-                          std::string> > RequiredRegularExpressions;
-    std::map<cmStdString, cmStdString> Measurements;
+    std::vector<std::string> RequiredFiles;
+    std::vector<std::string> Depends;
+    std::vector<std::string> AttachedFiles;
+    std::vector<std::string> AttachOnFail;
+    std::vector<std::pair<cmsys::RegularExpression, std::string>>
+      ErrorRegularExpressions;
+    std::vector<std::pair<cmsys::RegularExpression, std::string>>
+      RequiredRegularExpressions;
+    std::vector<std::pair<cmsys::RegularExpression, std::string>>
+      TimeoutRegularExpressions;
+    std::map<std::string, std::string> Measurements;
     bool IsInBasedOnREOptions;
     bool WillFail;
-    double Timeout;
+    bool Disabled;
+    float Cost;
+    int PreviousRuns;
+    bool RunSerial;
+    cmDuration Timeout;
+    bool ExplicitTimeout;
+    cmDuration AlternateTimeout;
+    int Index;
+    // Requested number of process slots
+    int Processors;
+    bool WantAffinity;
+    std::vector<size_t> Affinity;
+    // return code of test which will mark test as "not run"
+    int SkipReturnCode;
+    std::vector<std::string> Environment;
+    std::vector<std::string> Labels;
+    std::set<std::string> LockedResources;
+    std::set<std::string> FixturesSetup;
+    std::set<std::string> FixturesCleanup;
+    std::set<std::string> FixturesRequired;
+    std::set<std::string> RequireSuccessDepends;
+    // Private test generator properties used to track backtraces
+    cmListFileBacktrace Backtrace;
   };
 
   struct cmCTestTestResult
   {
     std::string Name;
     std::string Path;
+    std::string Reason;
     std::string FullCommandLine;
-    double      ExecutionTime;
-    int         ReturnValue;
-    int         Status;
+    cmDuration ExecutionTime;
+    std::int64_t ReturnValue;
+    int Status;
+    std::string ExceptionStatus;
+    bool CompressOutput;
     std::string CompletionStatus;
     std::string Output;
-    std::string RegressionImages;
-    int         TestCount;
+    std::string DartString;
+    int TestCount;
     cmCTestTestProperties* Properties;
   };
 
-  // add configuraitons to a search path for an executable
-  static void AddConfigurations(cmCTest *ctest, 
-                                std::vector<std::string> &attempted,
-                                std::vector<std::string> &attemptedConfigs,
-                                std::string filepath,
-                                std::string &filename);
+  struct cmCTestTestResultLess
+  {
+    bool operator()(const cmCTestTestResult& lhs,
+                    const cmCTestTestResult& rhs) const
+    {
+      return lhs.TestCount < rhs.TestCount;
+    }
+  };
+
+  // add configurations to a search path for an executable
+  static void AddConfigurations(cmCTest* ctest,
+                                std::vector<std::string>& attempted,
+                                std::vector<std::string>& attemptedConfigs,
+                                std::string filepath, std::string& filename);
 
   // full signature static method to find an executable
-  static std::string FindExecutable(cmCTest *ctest,
-                                    const char *testCommand,
-                                    std::string &resultingConfig,
-                                    std::vector<std::string> &extraPaths,
-                                    std::vector<std::string> &failed);
+  static std::string FindExecutable(cmCTest* ctest, const char* testCommand,
+                                    std::string& resultingConfig,
+                                    std::vector<std::string>& extraPaths,
+                                    std::vector<std::string>& failed);
+
+  typedef std::vector<cmCTestTestProperties> ListOfTests;
 
 protected:
+  // compute a final test list
   virtual int PreProcessHandler();
   virtual int PostProcessHandler();
-  virtual void GenerateTestCommand(std::vector<const char*>& args);
-  int ExecuteCommands(std::vector<cmStdString>& vec);
+  virtual void GenerateTestCommand(std::vector<std::string>& args, int test);
+  int ExecuteCommands(std::vector<std::string>& vec);
+
+  void WriteTestResultHeader(cmXMLWriter& xml,
+                             cmCTestTestResult const& result);
+  void WriteTestResultFooter(cmXMLWriter& xml,
+                             cmCTestTestResult const& result);
+  // Write attached test files into the xml
+  void AttachFiles(cmXMLWriter& xml, cmCTestTestResult& result);
 
   //! Clean test output to specified length
   bool CleanTestOutput(std::string& output, size_t length);
 
-  double                  ElapsedTestingTime;
+  cmDuration ElapsedTestingTime;
 
   typedef std::vector<cmCTestTestResult> TestResultsVector;
-  TestResultsVector    TestResults;
+  TestResultsVector TestResults;
 
-  std::vector<cmStdString> CustomTestsIgnore;
-  std::string             StartTest;
-  std::string             EndTest;
+  std::vector<std::string> CustomTestsIgnore;
+  std::string StartTest;
+  std::string EndTest;
+  std::chrono::system_clock::time_point StartTestTime;
+  std::chrono::system_clock::time_point EndTestTime;
   bool MemCheck;
   int CustomMaximumPassedTestOutputSize;
   int CustomMaximumFailedTestOutputSize;
-protected:
-  /**
-   *  Run one test
-   */
-  virtual void ProcessOneTest(cmCTestTestProperties *props,
-                              std::vector<cmStdString> &passed,
-                              std::vector<cmStdString> &failed,
-                              int count, int tmsize);
+  int MaxIndex;
 
-
-
-private:
-  enum { // Program statuses
+public:
+  enum
+  { // Program statuses
     NOT_RUN = 0,
     TIMEOUT,
     SEGFAULT,
@@ -164,53 +235,90 @@ private:
     COMPLETED
   };
 
-
+private:
   /**
    * Generate the Dart compatible output
    */
-  virtual void GenerateDartOutput(std::ostream& os);
+  virtual void GenerateDartOutput(cmXMLWriter& xml);
+
+  void PrintLabelOrSubprojectSummary(bool isSubProject);
 
   /**
    * Run the tests for a directory and any subdirectories
    */
-  void ProcessDirectory(std::vector<cmStdString> &passed,
-                        std::vector<cmStdString> &failed);
+  void ProcessDirectory(std::vector<std::string>& passed,
+                        std::vector<std::string>& failed);
 
-  typedef std::vector<cmCTestTestProperties> ListOfTests;
   /**
    * Get the list of tests in directory and subdirectories.
    */
   void GetListOfTests();
+  // compute the lists of tests that will actually run
+  // based on union regex and -I stuff
+  void ComputeTestList();
 
+  // compute the lists of tests that will actually run
+  // based on LastTestFailed.log
+  void ComputeTestListForRerunFailed();
+
+  // add required setup/cleanup tests not already in the
+  // list of tests to be run and update dependencies between
+  // tests to account for fixture setup/cleanup
+  void UpdateForFixtures(ListOfTests& tests) const;
+
+  void UpdateMaxTestNameWidth();
+
+  bool GetValue(const char* tag, std::string& value, std::istream& fin);
+  bool GetValue(const char* tag, int& value, std::istream& fin);
+  bool GetValue(const char* tag, size_t& value, std::istream& fin);
+  bool GetValue(const char* tag, bool& value, std::istream& fin);
+  bool GetValue(const char* tag, double& value, std::istream& fin);
   /**
    * Find the executable for a test
    */
-  std::string FindTheExecutable(const char *exe);
+  std::string FindTheExecutable(const char* exe);
 
-  const char* GetTestStatus(int status);
-  void ExpandTestsToRunInformation(int numPossibleTests);
+  std::string GetTestStatus(cmCTestTestResult const&);
+  void ExpandTestsToRunInformation(size_t numPossibleTests);
+  void ExpandTestsToRunInformationForRerunFailed();
 
-  std::vector<cmStdString> CustomPreTest;
-  std::vector<cmStdString> CustomPostTest;
+  std::vector<std::string> CustomPreTest;
+  std::vector<std::string> CustomPostTest;
 
-  std::vector<int>        TestsToRun;
+  std::vector<int> TestsToRun;
 
+  bool UseIncludeLabelRegExpFlag;
+  bool UseExcludeLabelRegExpFlag;
   bool UseIncludeRegExpFlag;
   bool UseExcludeRegExpFlag;
   bool UseExcludeRegExpFirst;
+  std::string IncludeLabelRegExp;
+  std::string ExcludeLabelRegExp;
   std::string IncludeRegExp;
   std::string ExcludeRegExp;
+  std::string ExcludeFixtureRegExp;
+  std::string ExcludeFixtureSetupRegExp;
+  std::string ExcludeFixtureCleanupRegExp;
+  cmsys::RegularExpression IncludeLabelRegularExpression;
+  cmsys::RegularExpression ExcludeLabelRegularExpression;
   cmsys::RegularExpression IncludeTestsRegularExpression;
   cmsys::RegularExpression ExcludeTestsRegularExpression;
 
-  std::string GenerateRegressionImages(const std::string& xml);
+  void GenerateRegressionImages(cmXMLWriter& xml, const std::string& dart);
+  cmsys::RegularExpression DartStuff1;
+  void CheckLabelFilter(cmCTestTestProperties& it);
+  void CheckLabelFilterExclude(cmCTestTestProperties& it);
+  void CheckLabelFilterInclude(cmCTestTestProperties& it);
 
   std::string TestsToRunString;
   bool UseUnion;
   ListOfTests TestList;
+  size_t TotalNumberOfTests;
   cmsys::RegularExpression DartStuff;
 
   std::ostream* LogFile;
+
+  bool RerunFailed;
 };
 
 #endif

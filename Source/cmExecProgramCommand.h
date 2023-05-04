@@ -1,23 +1,17 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmExecProgramCommand_h
 #define cmExecProgramCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+#include "cmProcessOutput.h"
+
+class cmExecutionStatus;
 
 /** \class cmExecProgramCommand
  * \brief Command that adds a target to the build system.
@@ -29,71 +23,23 @@
 class cmExecProgramCommand : public cmCommand
 {
 public:
+  typedef cmProcessOutput::Encoding Encoding;
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmExecProgramCommand;
-    }
+  cmCommand* Clone() override { return new cmExecProgramCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-  
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() 
-    {return "exec_program";}
-  
-  /**
-   * This determines if the command is invoked when in script mode.
-   */
-  virtual bool IsScriptable() { return true; }
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return 
-      "Deprecated.  Use the execute_process() command instead.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "Run an executable program during the processing of the CMakeList.txt"
-      " file.\n"
-      "  exec_program(Executable [directory in which to run]\n"
-      "               [ARGS <arguments to executable>]\n"
-      "               [OUTPUT_VARIABLE <var>]\n"
-      "               [RETURN_VALUE <var>])\n"
-      "The executable is run in the optionally specified directory.  The "
-      "executable can include arguments if it is double quoted, but it is "
-      "better to use the optional ARGS argument to specify arguments to the "
-      "program.   This is because cmake will then be able to escape spaces "
-      "in the executable path.  An optional argument OUTPUT_VARIABLE "
-      "specifies a variable in which to store the output. "
-      "To capture the return value of the execution, provide a RETURN_VALUE. "
-      "If OUTPUT_VARIABLE is specified, then no output will go to the "
-      "stdout/stderr of the console running cmake.\n"
-      ;
-    }
-  
-  /** This command is kept for compatibility with older CMake versions. */
-  virtual bool IsDiscouraged()
-    {
-    return true;
-    }
-
-  cmTypeMacro(cmExecProgramCommand, cmCommand);
+private:
+  static bool RunCommand(const char* command, std::string& output, int& retVal,
+                         const char* directory = nullptr, bool verbose = true,
+                         Encoding encoding = cmProcessOutput::Auto);
 };
 
 #endif

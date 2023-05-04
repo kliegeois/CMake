@@ -1,23 +1,17 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestSleepCommand_h
 #define cmCTestSleepCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmCTestCommand.h"
+
+#include <string>
+#include <vector>
+
+class cmCommand;
+class cmExecutionStatus;
 
 /** \class cmCTestSleep
  * \brief Run a ctest script
@@ -28,55 +22,25 @@
 class cmCTestSleepCommand : public cmCTestCommand
 {
 public:
-
   cmCTestSleepCommand() {}
-  
+
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
+  cmCommand* Clone() override
+  {
     cmCTestSleepCommand* ni = new cmCTestSleepCommand;
     ni->CTest = this->CTest;
     ni->CTestScriptHandler = this->CTestScriptHandler;
     return ni;
-    }
+  }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "CTEST_SLEEP";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "sleeps for some amount of time";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_SLEEP( seconds )\n"
-      "  CTEST_SLEEP( time1 duration time2 )\n"
-      "With one argument it will sleep for a given number of seconds. "
-      "With three arguments it will wait for time2 - time1 - duration "
-      "seconds.";
-    }
-
-  cmTypeMacro(cmCTestSleepCommand, cmCTestCommand);
-
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 };
-
 
 #endif

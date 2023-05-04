@@ -1,15 +1,6 @@
 #!/usr/bin/perl
-#
-# Program:   KWSys - Kitware System Library
-# Module:    $RCSfile$
-#
-# Copyright (c) Kitware, Inc., Insight Consortium.  All rights reserved.
-# See Copyright.txt or http://www.kitware.com/Copyright.htm for details.
-#
-#    This software is distributed WITHOUT ANY WARRANTY; without even
-#    the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-#    PURPOSE.  See the above copyright notices for more information.
-#
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing#kwsys for details.
 
 if ( $#ARGV+1 < 2 )
 {

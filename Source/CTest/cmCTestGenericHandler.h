@@ -1,47 +1,42 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestGenericHandler_h
 #define cmCTestGenericHandler_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
 
-#include "cmObject.h"
+#include <map>
+#include <stddef.h>
+#include <string>
+#include <vector>
 
-class cmCTest;
-class cmMakefile;
+#include "cmCTest.h"
+#include "cmSystemTools.h"
+
 class cmCTestCommand;
 class cmGeneratedFileStream;
+class cmMakefile;
 
 /** \class cmCTestGenericHandler
  * \brief A superclass of all CTest Handlers
  *
  */
-class cmCTestGenericHandler : public cmObject
+class cmCTestGenericHandler
 {
 public:
   /**
-   * If verbose then more informaiton is printed out
+   * If verbose then more information is printed out
    */
-  void SetVerbose(bool val) { this->HandlerVerbose = val; }
+  void SetVerbose(bool val)
+  {
+    this->HandlerVerbose =
+      val ? cmSystemTools::OUTPUT_MERGE : cmSystemTools::OUTPUT_NONE;
+  }
 
   /**
    * Populate internals from CTest custom scripts
    */
-  virtual void PopulateCustomVectors(cmMakefile *) {}
+  virtual void PopulateCustomVectors(cmMakefile*) {}
 
   /**
    * Do the actual processing. Subclass has to override it.
@@ -54,7 +49,10 @@ public:
    */
   virtual int ProcessCommandLineArguments(
     const std::string& /*currentArg*/, size_t& /*idx*/,
-    const std::vector<std::string>& /*allArgs*/) { return 1; }
+    const std::vector<std::string>& /*allArgs*/)
+  {
+    return 1;
+  }
 
   /**
    * Initialize handler
@@ -73,27 +71,33 @@ public:
   cmCTestGenericHandler();
   virtual ~cmCTestGenericHandler();
 
-  typedef std::map<cmStdString,cmStdString> t_StringToString;
+  typedef std::map<std::string, std::string> t_StringToString;
 
-  
-  void SetPersistentOption(const char* op, const char* value);
-  void SetOption(const char* op, const char* value);
-  const char* GetOption(const char* op);
+  void SetPersistentOption(const std::string& op, const char* value);
+  void SetOption(const std::string& op, const char* value);
+  const char* GetOption(const std::string& op);
 
-  void SetCommand(cmCTestCommand* command)
-    {
-    this->Command = command;
-    }
+  void SetCommand(cmCTestCommand* command) { this->Command = command; }
 
   void SetSubmitIndex(int idx) { this->SubmitIndex = idx; }
   int GetSubmitIndex() { return this->SubmitIndex; }
 
+  void SetAppendXML(bool b) { this->AppendXML = b; }
+  void SetQuiet(bool b) { this->Quiet = b; }
+  bool GetQuiet() { return this->Quiet; }
+  void SetTestLoad(unsigned long load) { this->TestLoad = load; }
+  unsigned long GetTestLoad() const { return this->TestLoad; }
+
 protected:
-  bool StartResultingXML(const char* name, cmGeneratedFileStream& xofs);
+  bool StartResultingXML(cmCTest::Part part, const char* name,
+                         cmGeneratedFileStream& xofs);
   bool StartLogFile(const char* name, cmGeneratedFileStream& xofs);
 
-  bool HandlerVerbose;
-  cmCTest *CTest;
+  bool AppendXML;
+  bool Quiet;
+  unsigned long TestLoad;
+  cmSystemTools::OutputOption HandlerVerbose;
+  cmCTest* CTest;
   t_StringToString Options;
   t_StringToString PersistentOptions;
 
@@ -102,4 +106,3 @@ protected:
 };
 
 #endif
-

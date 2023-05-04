@@ -1,94 +1,79 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmAuxSourceDirectoryCommand.h"
-#include "cmSourceFile.h"
 
-#include <cmsys/Directory.hxx>
+#include "cmsys/Directory.hxx"
+#include <algorithm>
+#include <stddef.h>
+#include <utility>
+
+#include "cmAlgorithms.h"
+#include "cmMakefile.h"
+#include "cmSourceFile.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
+
+class cmExecutionStatus;
 
 // cmAuxSourceDirectoryCommand
-bool cmAuxSourceDirectoryCommand::InitialPass
-(std::vector<std::string> const& args)
+bool cmAuxSourceDirectoryCommand::InitialPass(
+  std::vector<std::string> const& args, cmExecutionStatus&)
 {
-  if(args.size() < 2 || args.size() > 2)
-    {
+  if (args.size() != 2) {
     this->SetError("called with incorrect number of arguments");
     return false;
-    }
-  
+  }
+
   std::string sourceListValue;
-  std::string templateDirectory = args[0];
-  this->Makefile->AddExtraDirectory(templateDirectory.c_str());
+  std::string const& templateDirectory = args[0];
   std::string tdir;
-  if(!cmSystemTools::FileExists(templateDirectory.c_str()))
-    {
-    tdir = this->Makefile->GetCurrentDirectory();
+  if (!cmSystemTools::FileIsFullPath(templateDirectory)) {
+    tdir = this->Makefile->GetCurrentSourceDirectory();
     tdir += "/";
     tdir += templateDirectory;
-    }
-  else
-    {
+  } else {
     tdir = templateDirectory;
-    }
+  }
 
   // was the list already populated
-  const char *def = this->Makefile->GetDefinition(args[1].c_str());  
-  if (def)
-    {
+  const char* def = this->Makefile->GetDefinition(args[1]);
+  if (def) {
     sourceListValue = def;
-    }
-  
+  }
+
+  std::vector<std::string> files;
+
   // Load all the files in the directory
   cmsys::Directory dir;
-  if(dir.Load(tdir.c_str()))
-    {
+  if (dir.Load(tdir)) {
     size_t numfiles = dir.GetNumberOfFiles();
-    for(size_t i =0; i < numfiles; ++i)
-      {
+    for (size_t i = 0; i < numfiles; ++i) {
       std::string file = dir.GetFile(static_cast<unsigned long>(i));
       // Split the filename into base and extension
-      std::string::size_type dotpos = file.rfind(".");
-      if( dotpos != std::string::npos )
-        {
-        std::string ext = file.substr(dotpos+1);
+      std::string::size_type dotpos = file.rfind('.');
+      if (dotpos != std::string::npos) {
+        std::string ext = file.substr(dotpos + 1);
         std::string base = file.substr(0, dotpos);
         // Process only source files
-        if( base.size() != 0
-            && std::find( this->Makefile->GetSourceExtensions().begin(),
-                          this->Makefile->GetSourceExtensions().end(), ext )
-                 != this->Makefile->GetSourceExtensions().end() )
-          {
+        auto cm = this->Makefile->GetCMakeInstance();
+        if (!base.empty() && cm->IsSourceExtension(ext)) {
           std::string fullname = templateDirectory;
           fullname += "/";
           fullname += file;
-          // add the file as a class file so 
+          // add the file as a class file so
           // depends can be done
-          cmSourceFile* sf =
-            this->Makefile->GetOrCreateSource(fullname.c_str());
-          sf->SetProperty("ABSTRACT","0");
-          if(!sourceListValue.empty())
-            {
-            sourceListValue += ";";
-            }
-          sourceListValue += fullname;
-          }
+          cmSourceFile* sf = this->Makefile->GetOrCreateSource(fullname);
+          sf->SetProperty("ABSTRACT", "0");
+          files.push_back(std::move(fullname));
         }
       }
     }
-  this->Makefile->AddDefinition(args[1].c_str(), sourceListValue.c_str());  
+  }
+  std::sort(files.begin(), files.end());
+  if (!sourceListValue.empty()) {
+    sourceListValue += ";";
+  }
+  sourceListValue += cmJoin(files, ";");
+  this->Makefile->AddDefinition(args[1], sourceListValue.c_str());
   return true;
 }
-

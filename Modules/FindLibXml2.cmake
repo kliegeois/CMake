@@ -1,46 +1,102 @@
-# - Try to find LibXml2
-# Once done this will define
-#
-#  LIBXML2_FOUND - system has LibXml2
-#  LIBXML2_INCLUDE_DIR - the LibXml2 include directory
-#  LIBXML2_LIBRARIES - the libraries needed to use LibXml2
-#  LIBXML2_DEFINITIONS - Compiler switches required for using LibXml2
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-# Copyright (c) 2006, Alexander Neundorf, <neundorf@kde.org>
-#
-# Redistribution and use is allowed according to the terms of the BSD license.
-# For details see the accompanying COPYING-CMAKE-SCRIPTS file.
+#[=======================================================================[.rst:
+FindLibXml2
+-----------
 
+Find the XML processing library (libxml2).
 
-IF (LIBXML2_INCLUDE_DIR AND LIBXML2_LIBRARIES)
-   # in cache already
-   SET(LibXml2_FIND_QUIETLY TRUE)
-ENDIF (LIBXML2_INCLUDE_DIR AND LIBXML2_LIBRARIES)
+IMPORTED Targets
+^^^^^^^^^^^^^^^^
 
-IF (NOT WIN32)
-   # use pkg-config to get the directories and then use these values
-   # in the FIND_PATH() and FIND_LIBRARY() calls
-   INCLUDE(UsePkgConfig)
-   PKGCONFIG(libxml-2.0 _LibXml2IncDir _LibXml2LinkDir _LibXml2LinkFlags _LibXml2Cflags)
-   SET(LIBXML2_DEFINITIONS ${_LibXml2Cflags})
-ENDIF (NOT WIN32)
+This module defines :prop_tgt:`IMPORTED` target ``LibXml2::LibXml2``, if
+libxml2 has been found.
 
-FIND_PATH(LIBXML2_INCLUDE_DIR libxml/xpath.h
-   PATHS
-   ${_LibXml2IncDir}
+Result variables
+^^^^^^^^^^^^^^^^
+
+This module will set the following variables in your project:
+
+``LibXml2_FOUND``
+  true if libxml2 headers and libraries were found
+``LIBXML2_INCLUDE_DIR``
+  the directory containing LibXml2 headers
+``LIBXML2_INCLUDE_DIRS``
+  list of the include directories needed to use LibXml2
+``LIBXML2_LIBRARIES``
+  LibXml2 libraries to be linked
+``LIBXML2_DEFINITIONS``
+  the compiler switches required for using LibXml2
+``LIBXML2_XMLLINT_EXECUTABLE``
+  path to the XML checking tool xmllint coming with LibXml2
+``LIBXML2_VERSION_STRING``
+  the version of LibXml2 found (since CMake 2.8.8)
+
+Cache variables
+^^^^^^^^^^^^^^^
+
+The following cache variables may also be set:
+
+``LIBXML2_INCLUDE_DIR``
+  the directory containing LibXml2 headers
+``LIBXML2_LIBRARY``
+  path to the LibXml2 library
+#]=======================================================================]
+
+# use pkg-config to get the directories and then use these values
+# in the find_path() and find_library() calls
+find_package(PkgConfig QUIET)
+PKG_CHECK_MODULES(PC_LIBXML QUIET libxml-2.0)
+set(LIBXML2_DEFINITIONS ${PC_LIBXML_CFLAGS_OTHER})
+
+find_path(LIBXML2_INCLUDE_DIR NAMES libxml/xpath.h
+   HINTS
+   ${PC_LIBXML_INCLUDEDIR}
+   ${PC_LIBXML_INCLUDE_DIRS}
    PATH_SUFFIXES libxml2
    )
 
-FIND_LIBRARY(LIBXML2_LIBRARIES NAMES xml2 libxml2
-   PATHS
-   ${_LibXml2LinkDir}
+# CMake 3.9 and below used 'LIBXML2_LIBRARIES' as the name of
+# the cache entry storing the find_library result.  Use the
+# value if it was set by the project or user.
+if(DEFINED LIBXML2_LIBRARIES AND NOT DEFINED LIBXML2_LIBRARY)
+  set(LIBXML2_LIBRARY ${LIBXML2_LIBRARIES})
+endif()
+
+find_library(LIBXML2_LIBRARY NAMES xml2 libxml2
+   HINTS
+   ${PC_LIBXML_LIBDIR}
+   ${PC_LIBXML_LIBRARY_DIRS}
    )
 
-INCLUDE(FindPackageHandleStandardArgs)
+find_program(LIBXML2_XMLLINT_EXECUTABLE xmllint)
+# for backwards compat. with KDE 4.0.x:
+set(XMLLINT_EXECUTABLE "${LIBXML2_XMLLINT_EXECUTABLE}")
 
-# handle the QUIETLY and REQUIRED arguments and set LIBXML2_FOUND to TRUE if 
-# all listed variables are TRUE
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(LibXml2 DEFAULT_MSG LIBXML2_LIBRARIES LIBXML2_INCLUDE_DIR)
+if(PC_LIBXML_VERSION)
+    set(LIBXML2_VERSION_STRING ${PC_LIBXML_VERSION})
+elseif(LIBXML2_INCLUDE_DIR AND EXISTS "${LIBXML2_INCLUDE_DIR}/libxml/xmlversion.h")
+    file(STRINGS "${LIBXML2_INCLUDE_DIR}/libxml/xmlversion.h" libxml2_version_str
+         REGEX "^#define[\t ]+LIBXML_DOTTED_VERSION[\t ]+\".*\"")
 
-MARK_AS_ADVANCED(LIBXML2_INCLUDE_DIR LIBXML2_LIBRARIES)
+    string(REGEX REPLACE "^#define[\t ]+LIBXML_DOTTED_VERSION[\t ]+\"([^\"]*)\".*" "\\1"
+           LIBXML2_VERSION_STRING "${libxml2_version_str}")
+    unset(libxml2_version_str)
+endif()
 
+set(LIBXML2_INCLUDE_DIRS ${LIBXML2_INCLUDE_DIR} ${PC_LIBXML_INCLUDE_DIRS})
+set(LIBXML2_LIBRARIES ${LIBXML2_LIBRARY})
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(LibXml2
+                                  REQUIRED_VARS LIBXML2_LIBRARY LIBXML2_INCLUDE_DIR
+                                  VERSION_VAR LIBXML2_VERSION_STRING)
+
+mark_as_advanced(LIBXML2_INCLUDE_DIR LIBXML2_LIBRARY LIBXML2_XMLLINT_EXECUTABLE)
+
+if(LibXml2_FOUND AND NOT TARGET LibXml2::LibXml2)
+  add_library(LibXml2::LibXml2 UNKNOWN IMPORTED)
+  set_target_properties(LibXml2::LibXml2 PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${LIBXML2_INCLUDE_DIRS}")
+  set_property(TARGET LibXml2::LibXml2 APPEND PROPERTY IMPORTED_LOCATION "${LIBXML2_LIBRARY}")
+endif()

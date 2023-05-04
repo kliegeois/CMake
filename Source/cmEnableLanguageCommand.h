@@ -1,23 +1,16 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmEnableLanguageCommand_h
 #define cmEnableLanguageCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+
+class cmExecutionStatus;
 
 /** \class cmEnableLanguageCommand
  * \brief Specify the name for this build project.
@@ -33,48 +26,14 @@ public:
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmEnableLanguageCommand;
-    }
+  cmCommand* Clone() override { return new cmEnableLanguageCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-  
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() {return "enable_language";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Enable a language (CXX/C/Fortran/etc)";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  enable_language(languageName [OPTIONAL] )\n"
-      "This command enables support for the named language in CMake. "
-      "This is the same as the project command but does not create "
-      "any of the extra varaibles that are created by the project command. "
-      "Example languages are CXX, C, Fortran.\n"
-      "If OPTIONAL is used, use the CMAKE_<languageName>_COMPILER_WORKS "
-      "variable to check whether the language has been enabled successfully.";
-    }
-  
-  cmTypeMacro(cmEnableLanguageCommand, cmCommand);
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 };
-
-
 
 #endif

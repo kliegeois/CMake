@@ -1,23 +1,16 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmMessageCommand_h
 #define cmMessageCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+
+class cmExecutionStatus;
 
 /** \class cmMessageCommand
  * \brief Displays a message to the user
@@ -29,55 +22,14 @@ public:
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmMessageCommand;
-    }
+  cmCommand* Clone() override { return new cmMessageCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "message";}
-
-  /**
-   * This determines if the command is invoked when in script mode.
-   */
-  virtual bool IsScriptable() { return true; }
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Display a message to the user.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  message([SEND_ERROR | STATUS | FATAL_ERROR]\n"
-      "          \"message to display\" ...)\n"
-      "By default the message is displayed in a pop up window (CMakeSetup), "
-      "or in the stdout of cmake, or the error section of ccmake. "
-      "If the first argument is "
-      "SEND_ERROR then an error is raised, and the generate phase will "
-      "be skipped.  If the first argument is FATAL_ERROR, all processing "
-      "is halted. If the first argument is STATUS then the message is "
-      "displayed in the progress line for the GUI, or with a -- in the "
-      "command line cmake.";
-    }
-  
-  cmTypeMacro(cmMessageCommand, cmCommand);
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 };
-
 
 #endif

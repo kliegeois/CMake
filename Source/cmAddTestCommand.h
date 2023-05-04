@@ -1,23 +1,16 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmAddTestCommand_h
 #define cmAddTestCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+
+class cmExecutionStatus;
 
 /** \class cmAddTestCommand
  * \brief Add a test to the lists of tests to run.
@@ -30,51 +23,17 @@ public:
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmAddTestCommand;
-    }
+  cmCommand* Clone() override { return new cmAddTestCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "add_test";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Add a test to the project with the specified arguments.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  add_test(testname Exename arg1 arg2 ...)\n"
-      "If the ENABLE_TESTING command has been run, this command adds a "
-      "test target to the current directory. If ENABLE_TESTING has not "
-      "been run, this command does nothing.  "
-      "The tests are run by the testing subsystem by executing Exename "
-      "with the specified arguments.  Exename can be either an executable "
-      "built by this project or an arbitrary executable on the "
-      "system (like tclsh).  The test will be run with the current working "
-      "directory set to the CMakeList.txt files corresponding directory "
-      "in the binary tree.";
-    }
-  
-  cmTypeMacro(cmAddTestCommand, cmCommand);
-
+private:
+  bool HandleNameMode(std::vector<std::string> const& args);
 };
-
 
 #endif

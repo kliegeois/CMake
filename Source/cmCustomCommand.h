@@ -1,23 +1,18 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCustomCommand_h
 #define cmCustomCommand_h
 
-#include "cmStandardIncludes.h"
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include "cmCustomCommandLines.h"
+#include "cmListFileCache.h"
+
+#include <string>
+#include <utility>
+#include <vector>
+
+class cmMakefile;
 
 /** \class cmCustomCommand
  * \brief A class to encapsulate a custom command
@@ -27,25 +22,27 @@
 class cmCustomCommand
 {
 public:
-  /** Default and copy constructors for STL containers.  */
-  cmCustomCommand();
-  cmCustomCommand(const cmCustomCommand& r);
-
   /** Main constructor specifies all information for the command.  */
-  cmCustomCommand(const std::vector<std::string>& outputs,
-                  const std::vector<std::string>& depends,
-                  const cmCustomCommandLines& commandLines,
-                  const char* comment,
+  cmCustomCommand(cmMakefile const* mf, std::vector<std::string> outputs,
+                  std::vector<std::string> byproducts,
+                  std::vector<std::string> depends,
+                  cmCustomCommandLines commandLines, const char* comment,
                   const char* workingDirectory);
 
   /** Get the output file produced by the command.  */
   const std::vector<std::string>& GetOutputs() const;
 
-  /** Get the working directory.  */
-  const char* GetWorkingDirectory() const;
+  /** Get the extra files produced by the command.  */
+  const std::vector<std::string>& GetByproducts() const;
 
   /** Get the vector that holds the list of dependencies.  */
   const std::vector<std::string>& GetDepends() const;
+
+  /** Get the working directory.  */
+  std::string const& GetWorkingDirectory() const
+  {
+    return this->WorkingDirectory;
+  }
 
   /** Get the list of command lines.  */
   const cmCustomCommandLines& GetCommandLines() const;
@@ -68,22 +65,50 @@ public:
   bool GetEscapeAllowMakeVars() const;
   void SetEscapeAllowMakeVars(bool b);
 
-  typedef std::pair<cmStdString, cmStdString> ImplicitDependsPair;
-  class ImplicitDependsList: public std::vector<ImplicitDependsPair> {};
+  /** Backtrace of the command that created this custom command.  */
+  cmListFileBacktrace const& GetBacktrace() const;
+
+  typedef std::pair<std::string, std::string> ImplicitDependsPair;
+  class ImplicitDependsList : public std::vector<ImplicitDependsPair>
+  {
+  };
   void SetImplicitDepends(ImplicitDependsList const&);
   void AppendImplicitDepends(ImplicitDependsList const&);
   ImplicitDependsList const& GetImplicitDepends() const;
 
+  /** Set/Get whether this custom command should be given access to the
+      real console (if possible).  */
+  bool GetUsesTerminal() const;
+  void SetUsesTerminal(bool b);
+
+  /** Set/Get whether lists in command lines should be expanded. */
+  bool GetCommandExpandLists() const;
+  void SetCommandExpandLists(bool b);
+
+  /** Set/Get the depfile (used by the Ninja generator) */
+  const std::string& GetDepfile() const;
+  void SetDepfile(const std::string& depfile);
+
+  /** Set/Get the job_pool (used by the Ninja generator) */
+  const std::string& GetJobPool() const;
+  void SetJobPool(const std::string& job_pool);
+
 private:
   std::vector<std::string> Outputs;
+  std::vector<std::string> Byproducts;
   std::vector<std::string> Depends;
   cmCustomCommandLines CommandLines;
-  bool HaveComment;
+  cmListFileBacktrace Backtrace;
+  ImplicitDependsList ImplicitDepends;
   std::string Comment;
   std::string WorkingDirectory;
-  bool EscapeAllowMakeVars;
-  bool EscapeOldStyle;
-  ImplicitDependsList ImplicitDepends;
+  std::string Depfile;
+  std::string JobPool;
+  bool HaveComment = false;
+  bool EscapeAllowMakeVars = false;
+  bool EscapeOldStyle = true;
+  bool UsesTerminal = false;
+  bool CommandExpandLists = false;
 };
 
 #endif

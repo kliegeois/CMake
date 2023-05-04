@@ -1,39 +1,36 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmTryCompileCommand.h"
 
-// cmTryCompileCommand
-bool cmTryCompileCommand::InitialPass(std::vector<std::string> const& argv)
-{
-  if(argv.size() < 3)
-    {
-    return false;
-    }
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmake.h"
 
-  this->TryCompileCode(argv);
+class cmExecutionStatus;
+
+// cmTryCompileCommand
+bool cmTryCompileCommand::InitialPass(std::vector<std::string> const& argv,
+                                      cmExecutionStatus&)
+{
+  if (argv.size() < 3) {
+    return false;
+  }
+
+  if (this->Makefile->GetCMakeInstance()->GetWorkingMode() ==
+      cmake::FIND_PACKAGE_MODE) {
+    this->Makefile->IssueMessage(
+      MessageType::FATAL_ERROR,
+      "The TRY_COMPILE() command is not supported in --find-package mode.");
+    return false;
+  }
+
+  this->TryCompileCode(argv, false);
 
   // if They specified clean then we clean up what we can
-  if (this->SrcFileSignature)
-    {
-    if(!this->Makefile->GetCMakeInstance()->GetDebugTryCompile())
-      {
-      this->CleanupFiles(this->BinaryDirectory.c_str());
-      }
+  if (this->SrcFileSignature) {
+    if (!this->Makefile->GetCMakeInstance()->GetDebugTryCompile()) {
+      this->CleanupFiles(this->BinaryDirectory);
     }
+  }
   return true;
 }
-

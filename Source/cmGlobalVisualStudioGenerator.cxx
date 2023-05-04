@@ -1,96 +1,264 @@
-/*=========================================================================
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalVisualStudioGenerator.h"
 
-#include "cmCallVisualStudioMacro.h"
-#include "cmLocalGenerator.h"
-#include "cmMakefile.h"
-#include "cmTarget.h"
+#include "cmsys/Encoding.hxx"
+#include <future>
+#include <iostream>
+#include <objbase.h>
+#include <shellapi.h>
+#include <windows.h>
 
-//----------------------------------------------------------------------------
-cmGlobalVisualStudioGenerator::cmGlobalVisualStudioGenerator()
+#include "cmAlgorithms.h"
+#include "cmCallVisualStudioMacro.h"
+#include "cmCustomCommand.h"
+#include "cmGeneratedFileStream.h"
+#include "cmGeneratorTarget.h"
+#include "cmLocalVisualStudioGenerator.h"
+#include "cmMakefile.h"
+#include "cmSourceFile.h"
+#include "cmState.h"
+#include "cmTarget.h"
+#include "cmake.h"
+
+cmGlobalVisualStudioGenerator::cmGlobalVisualStudioGenerator(
+  cmake* cm, std::string const& platformInGeneratorName)
+  : cmGlobalGenerator(cm)
 {
+  cm->GetState()->SetIsGeneratorMultiConfig(true);
+  cm->GetState()->SetWindowsShell(true);
+  cm->GetState()->SetWindowsVSIDE(true);
+
+  if (platformInGeneratorName.empty()) {
+    this->DefaultPlatformName = "Win32";
+  } else {
+    this->DefaultPlatformName = platformInGeneratorName;
+    this->PlatformInGeneratorName = true;
+  }
 }
 
-//----------------------------------------------------------------------------
 cmGlobalVisualStudioGenerator::~cmGlobalVisualStudioGenerator()
 {
 }
 
-//----------------------------------------------------------------------------
-void cmGlobalVisualStudioGenerator::Generate()
+cmGlobalVisualStudioGenerator::VSVersion
+cmGlobalVisualStudioGenerator::GetVersion() const
+{
+  return this->Version;
+}
+
+void cmGlobalVisualStudioGenerator::SetVersion(VSVersion v)
+{
+  this->Version = v;
+}
+
+void cmGlobalVisualStudioGenerator::EnableLanguage(
+  std::vector<std::string> const& lang, cmMakefile* mf, bool optional)
+{
+  mf->AddDefinition("CMAKE_VS_PLATFORM_NAME_DEFAULT",
+                    this->DefaultPlatformName.c_str());
+  this->cmGlobalGenerator::EnableLanguage(lang, mf, optional);
+}
+
+bool cmGlobalVisualStudioGenerator::SetGeneratorPlatform(std::string const& p,
+                                                         cmMakefile* mf)
+{
+  if (this->GetPlatformName() == "x64") {
+    mf->AddDefinition("CMAKE_FORCE_WIN64", "TRUE");
+  } else if (this->GetPlatformName() == "Itanium") {
+    mf->AddDefinition("CMAKE_FORCE_IA64", "TRUE");
+  }
+  mf->AddDefinition("CMAKE_VS_PLATFORM_NAME", this->GetPlatformName().c_str());
+  return this->cmGlobalGenerator::SetGeneratorPlatform(p, mf);
+}
+
+std::string const& cmGlobalVisualStudioGenerator::GetPlatformName() const
+{
+  if (!this->GeneratorPlatform.empty()) {
+    return this->GeneratorPlatform;
+  }
+  return this->DefaultPlatformName;
+}
+
+const char* cmGlobalVisualStudioGenerator::GetIDEVersion() const
+{
+  switch (this->Version) {
+    case cmGlobalVisualStudioGenerator::VS9:
+      return "9.0";
+    case cmGlobalVisualStudioGenerator::VS10:
+      return "10.0";
+    case cmGlobalVisualStudioGenerator::VS11:
+      return "11.0";
+    case cmGlobalVisualStudioGenerator::VS12:
+      return "12.0";
+    case cmGlobalVisualStudioGenerator::VS14:
+      return "14.0";
+    case cmGlobalVisualStudioGenerator::VS15:
+      return "15.0";
+    case cmGlobalVisualStudioGenerator::VS16:
+      return "16.0";
+  }
+  return "";
+}
+
+void cmGlobalVisualStudioGenerator::WriteSLNHeader(std::ostream& fout)
+{
+  switch (this->Version) {
+    case cmGlobalVisualStudioGenerator::VS9:
+      fout << "Microsoft Visual Studio Solution File, Format Version 10.00\n";
+      fout << "# Visual Studio 2008\n";
+      break;
+    case cmGlobalVisualStudioGenerator::VS10:
+      fout << "Microsoft Visual Studio Solution File, Format Version 11.00\n";
+      if (this->ExpressEdition) {
+        fout << "# Visual C++ Express 2010\n";
+      } else {
+        fout << "# Visual Studio 2010\n";
+      }
+      break;
+    case cmGlobalVisualStudioGenerator::VS11:
+      fout << "Microsoft Visual Studio Solution File, Format Version 12.00\n";
+      if (this->ExpressEdition) {
+        fout << "# Visual Studio Express 2012 for Windows Desktop\n";
+      } else {
+        fout << "# Visual Studio 2012\n";
+      }
+      break;
+    case cmGlobalVisualStudioGenerator::VS12:
+      fout << "Microsoft Visual Studio Solution File, Format Version 12.00\n";
+      if (this->ExpressEdition) {
+        fout << "# Visual Studio Express 2013 for Windows Desktop\n";
+      } else {
+        fout << "# Visual Studio 2013\n";
+      }
+      break;
+    case cmGlobalVisualStudioGenerator::VS14:
+      // Visual Studio 14 writes .sln format 12.00
+      fout << "Microsoft Visual Studio Solution File, Format Version 12.00\n";
+      if (this->ExpressEdition) {
+        fout << "# Visual Studio Express 14 for Windows Desktop\n";
+      } else {
+        fout << "# Visual Studio 14\n";
+      }
+      break;
+    case cmGlobalVisualStudioGenerator::VS15:
+      // Visual Studio 15 writes .sln format 12.00
+      fout << "Microsoft Visual Studio Solution File, Format Version 12.00\n";
+      if (this->ExpressEdition) {
+        fout << "# Visual Studio Express 15 for Windows Desktop\n";
+      } else {
+        fout << "# Visual Studio 15\n";
+      }
+      break;
+    case cmGlobalVisualStudioGenerator::VS16:
+      // Visual Studio 16 writes .sln format 12.00
+      fout << "Microsoft Visual Studio Solution File, Format Version 12.00\n";
+      if (this->ExpressEdition) {
+        fout << "# Visual Studio Express 16 for Windows Desktop\n";
+      } else {
+        fout << "# Visual Studio 16\n";
+      }
+      break;
+  }
+}
+
+std::string cmGlobalVisualStudioGenerator::GetRegistryBase()
+{
+  return cmGlobalVisualStudioGenerator::GetRegistryBase(this->GetIDEVersion());
+}
+
+std::string cmGlobalVisualStudioGenerator::GetRegistryBase(const char* version)
+{
+  std::string key = "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\";
+  return key + version;
+}
+
+void cmGlobalVisualStudioGenerator::AddExtraIDETargets()
 {
   // Add a special target that depends on ALL projects for easy build
   // of one configuration only.
   const char* no_working_dir = 0;
   std::vector<std::string> no_depends;
   cmCustomCommandLines no_commands;
-  std::map<cmStdString, std::vector<cmLocalGenerator*> >::iterator it;
-  for(it = this->ProjectMap.begin(); it!= this->ProjectMap.end(); ++it)
-    {
-    std::vector<cmLocalGenerator*>& gen = it->second;
+  for (auto const& it : this->ProjectMap) {
+    std::vector<cmLocalGenerator*> const& gen = it.second;
     // add the ALL_BUILD to the first local generator of each project
-    if(gen.size())
-      {
+    if (!gen.empty()) {
       // Use no actual command lines so that the target itself is not
       // considered always out of date.
-      gen[0]->GetMakefile()->
-        AddUtilityCommand("ALL_BUILD", true, no_working_dir,
-                          no_depends, no_commands, false,
-                          "Build all projects");
+      cmTarget* allBuild = gen[0]->GetMakefile()->AddUtilityCommand(
+        "ALL_BUILD", cmMakefile::TargetOrigin::Generator, true, no_working_dir,
+        no_depends, no_commands, false, "Build all projects");
+
+      cmGeneratorTarget* gt = new cmGeneratorTarget(allBuild, gen[0]);
+      gen[0]->AddGeneratorTarget(gt);
+
+      //
+      // Organize in the "predefined targets" folder:
+      //
+      if (this->UseFolderProperty()) {
+        allBuild->SetProperty("FOLDER", this->GetPredefinedTargetsFolder());
+      }
+
+      // Now make all targets depend on the ALL_BUILD target
+      for (cmLocalGenerator const* i : gen) {
+        for (cmGeneratorTarget* tgt : i->GetGeneratorTargets()) {
+          if (tgt->GetType() == cmStateEnums::GLOBAL_TARGET ||
+              tgt->IsImported()) {
+            continue;
+          }
+          if (!this->IsExcluded(tgt)) {
+            allBuild->AddUtility(tgt->GetName());
+          }
+        }
       }
     }
-
-  // Fix utility dependencies to avoid linking to libraries.
-  this->FixUtilityDepends();
+  }
 
   // Configure CMake Visual Studio macros, for this user on this version
   // of Visual Studio.
   this->ConfigureCMakeVisualStudioMacros();
-
-  // Run all the local generators.
-  this->cmGlobalGenerator::Generate();
 }
 
-//----------------------------------------------------------------------------
+void cmGlobalVisualStudioGenerator::ComputeTargetObjectDirectory(
+  cmGeneratorTarget* gt) const
+{
+  std::string dir = gt->LocalGenerator->GetCurrentBinaryDirectory();
+  dir += "/";
+  std::string tgtDir = gt->LocalGenerator->GetTargetDirectory(gt);
+  if (!tgtDir.empty()) {
+    dir += tgtDir;
+    dir += "/";
+  }
+  const char* cd = this->GetCMakeCFGIntDir();
+  if (cd && *cd) {
+    dir += cd;
+    dir += "/";
+  }
+  gt->ObjectDirectory = dir;
+}
+
 bool IsVisualStudioMacrosFileRegistered(const std::string& macrosFile,
-  std::string& nextAvailableSubKeyName);
+                                        const std::string& regKeyBase,
+                                        std::string& nextAvailableSubKeyName);
 
-void RegisterVisualStudioMacros(const std::string& macrosFile);
+void RegisterVisualStudioMacros(const std::string& macrosFile,
+                                const std::string& regKeyBase);
 
-//----------------------------------------------------------------------------
-#define CMAKE_VSMACROS_FILENAME \
-  "CMakeVSMacros1.vsmacros"
+#define CMAKE_VSMACROS_FILENAME "CMakeVSMacros2.vsmacros"
 
-#define CMAKE_VSMACROS_RELOAD_MACRONAME \
-  "Macros.CMakeVSMacros1.Macros.ReloadProjects"
+#define CMAKE_VSMACROS_RELOAD_MACRONAME                                       \
+  "Macros.CMakeVSMacros2.Macros.ReloadProjects"
 
-#define CMAKE_VSMACROS_STOP_MACRONAME \
-  "Macros.CMakeVSMacros1.Macros.StopBuild"
+#define CMAKE_VSMACROS_STOP_MACRONAME "Macros.CMakeVSMacros2.Macros.StopBuild"
 
-//----------------------------------------------------------------------------
 void cmGlobalVisualStudioGenerator::ConfigureCMakeVisualStudioMacros()
 {
-  cmMakefile* mf = this->LocalGenerators[0]->GetMakefile();
   std::string dir = this->GetUserMacrosDirectory();
 
-  if (mf != 0 && dir != "")
-    {
-    std::string src = mf->GetRequiredDefinition("CMAKE_ROOT");
+  if (!dir.empty()) {
+    std::string src = cmSystemTools::GetCMakeRoot();
     src += "/Templates/" CMAKE_VSMACROS_FILENAME;
 
     std::string dst = dir + "/CMakeMacros/" CMAKE_VSMACROS_FILENAME;
@@ -101,27 +269,21 @@ void cmGlobalVisualStudioGenerator::ConfigureCMakeVisualStudioMacros()
     // purposes but newer versions distributed with CMake will replace
     // older versions in user directories.
     int res;
-    if(!cmSystemTools::FileTimeCompare(src.c_str(), dst.c_str(), &res) ||
-       res > 0)
-      {
-      if (!cmSystemTools::CopyFileAlways(src.c_str(), dst.c_str()))
-        {
+    if (!cmSystemTools::FileTimeCompare(src, dst, &res) || res > 0) {
+      if (!cmSystemTools::CopyFileAlways(src, dst)) {
         std::ostringstream oss;
         oss << "Could not copy from: " << src << std::endl;
         oss << "                 to: " << dst << std::endl;
-        cmSystemTools::Message(oss.str().c_str(), "Warning");
-        }
+        cmSystemTools::Message(oss.str(), "Warning");
       }
-
-    RegisterVisualStudioMacros(dst);
     }
+
+    RegisterVisualStudioMacros(dst, this->GetUserMacrosRegKeyBase());
+  }
 }
 
-//----------------------------------------------------------------------------
-void
-cmGlobalVisualStudioGenerator
-::CallVisualStudioMacro(MacroName m,
-                        const char* vsSolutionFile)
+void cmGlobalVisualStudioGenerator::CallVisualStudioMacro(
+  MacroName m, const char* vsSolutionFile)
 {
   // If any solution or project files changed during the generation,
   // tell Visual Studio to reload them...
@@ -129,274 +291,244 @@ cmGlobalVisualStudioGenerator
   std::string dir = this->GetUserMacrosDirectory();
 
   // Only really try to call the macro if:
-  //  - mf is non-NULL
   //  - there is a UserMacrosDirectory
   //  - the CMake vsmacros file exists
   //  - the CMake vsmacros file is registered
   //  - there were .sln/.vcproj files changed during generation
   //
-  if (mf != 0 && dir != "")
-    {
+  if (!dir.empty()) {
     std::string macrosFile = dir + "/CMakeMacros/" CMAKE_VSMACROS_FILENAME;
     std::string nextSubkeyName;
     if (cmSystemTools::FileExists(macrosFile.c_str()) &&
-      IsVisualStudioMacrosFileRegistered(macrosFile, nextSubkeyName)
-      )
-      {
+        IsVisualStudioMacrosFileRegistered(
+          macrosFile, this->GetUserMacrosRegKeyBase(), nextSubkeyName)) {
       std::string topLevelSlnName;
-      if(vsSolutionFile)
-        {
+      if (vsSolutionFile) {
         topLevelSlnName = vsSolutionFile;
-        }
-      else
-        {
-        topLevelSlnName = mf->GetStartOutputDirectory();
+      } else {
+        topLevelSlnName = mf->GetCurrentBinaryDirectory();
         topLevelSlnName += "/";
-        topLevelSlnName += mf->GetProjectName();
+        topLevelSlnName += this->LocalGenerators[0]->GetProjectName();
         topLevelSlnName += ".sln";
-        }
+      }
 
-      if(m == MacroReload)
-        {
+      if (m == MacroReload) {
         std::vector<std::string> filenames;
         this->GetFilesReplacedDuringGenerate(filenames);
-        if (filenames.size() > 0)
-          {
-          // Convert vector to semi-colon delimited string of filenames:
-          std::string projects;
-          std::vector<std::string>::iterator it = filenames.begin();
-          if (it != filenames.end())
-            {
-            projects = *it;
-            ++it;
-            }
-          for (; it != filenames.end(); ++it)
-            {
-            projects += ";";
-            projects += *it;
-            }
-          cmCallVisualStudioMacro::CallMacro
-            (topLevelSlnName, CMAKE_VSMACROS_RELOAD_MACRONAME, projects);
-          }
+        if (!filenames.empty()) {
+          std::string projects = cmJoin(filenames, ";");
+          cmCallVisualStudioMacro::CallMacro(
+            topLevelSlnName, CMAKE_VSMACROS_RELOAD_MACRONAME, projects,
+            this->GetCMakeInstance()->GetDebugOutput());
         }
-      else if(m == MacroStop)
-        {
-        cmCallVisualStudioMacro::CallMacro(topLevelSlnName,
-          CMAKE_VSMACROS_STOP_MACRONAME, "");
-        }
+      } else if (m == MacroStop) {
+        cmCallVisualStudioMacro::CallMacro(
+          topLevelSlnName, CMAKE_VSMACROS_STOP_MACRONAME, "",
+          this->GetCMakeInstance()->GetDebugOutput());
       }
     }
+  }
 }
 
-//----------------------------------------------------------------------------
 std::string cmGlobalVisualStudioGenerator::GetUserMacrosDirectory()
 {
   return "";
 }
 
-//----------------------------------------------------------------------------
-void cmGlobalVisualStudioGenerator::FixUtilityDepends()
+std::string cmGlobalVisualStudioGenerator::GetUserMacrosRegKeyBase()
 {
-  // Skip for VS versions 8 and above.
-  if(!this->VSLinksDependencies())
-    {
+  return "";
+}
+
+void cmGlobalVisualStudioGenerator::FillLinkClosure(
+  const cmGeneratorTarget* target, TargetSet& linked)
+{
+  if (linked.insert(target).second) {
+    TargetDependSet const& depends = this->GetTargetDirectDepends(target);
+    for (cmTargetDepend const& di : depends) {
+      if (di.IsLink()) {
+        this->FillLinkClosure(di, linked);
+      }
+    }
+  }
+}
+
+cmGlobalVisualStudioGenerator::TargetSet const&
+cmGlobalVisualStudioGenerator::GetTargetLinkClosure(cmGeneratorTarget* target)
+{
+  auto i = this->TargetLinkClosure.find(target);
+  if (i == this->TargetLinkClosure.end()) {
+    TargetSetMap::value_type entry(target, TargetSet());
+    i = this->TargetLinkClosure.insert(entry).first;
+    this->FillLinkClosure(target, i->second);
+  }
+  return i->second;
+}
+
+void cmGlobalVisualStudioGenerator::FollowLinkDepends(
+  const cmGeneratorTarget* target, std::set<const cmGeneratorTarget*>& linked)
+{
+  if (target->GetType() == cmStateEnums::INTERFACE_LIBRARY) {
     return;
-    }
-
-  // For VS versions before 8:
-  //
-  // When a target that links contains a project-level dependency on a
-  // library target that library is automatically linked.  In order to
-  // allow utility-style project-level dependencies that do not
-  // actually link we need to automatically insert an intermediate
-  // custom target.
-  //
-  // Here we edit the utility dependencies of a target to add the
-  // intermediate custom target when necessary.
-  for(unsigned i = 0; i < this->LocalGenerators.size(); ++i)
-    {
-    cmTargets* targets =
-      &(this->LocalGenerators[i]->GetMakefile()->GetTargets());
-    for(cmTargets::iterator tarIt = targets->begin();
-        tarIt != targets->end(); ++tarIt)
-      {
-      this->FixUtilityDependsForTarget(tarIt->second);
+  }
+  if (linked.insert(target).second &&
+      target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+    // Static library targets do not list their link dependencies so
+    // we must follow them transitively now.
+    TargetDependSet const& depends = this->GetTargetDirectDepends(target);
+    for (cmTargetDepend const& di : depends) {
+      if (di.IsLink()) {
+        this->FollowLinkDepends(di, linked);
       }
     }
+  }
 }
 
-//----------------------------------------------------------------------------
-void
-cmGlobalVisualStudioGenerator::FixUtilityDependsForTarget(cmTarget& target)
+bool cmGlobalVisualStudioGenerator::ComputeTargetDepends()
 {
-  // Only targets that link need to be fixed.
-  if(target.GetType() != cmTarget::STATIC_LIBRARY &&
-     target.GetType() != cmTarget::SHARED_LIBRARY &&
-     target.GetType() != cmTarget::MODULE_LIBRARY &&
-     target.GetType() != cmTarget::EXECUTABLE)
-    {
-    return;
-    }
-
-#if 0
-  // This feature makes a mess in SLN files for VS 7.1 and below.  It
-  // creates an extra target for every target that is "linked" by a
-  // static library.  Without this feature static libraries do not
-  // wait until their "link" dependencies are built to build.  This is
-  // not a problem 99.9% of the time, and projects that do have the
-  // problem can enable this work-around by using add_dependencies.
-
-  // Static libraries cannot depend directly on the targets to which
-  // they link because VS will copy those targets into the library
-  // (for VS < 8).  To work around the problem we copy the
-  // dependencies to be utility dependencies so that the work-around
-  // below is used.
-  if(target.GetType() == cmTarget::STATIC_LIBRARY)
-    {
-    cmTarget::LinkLibraryVectorType const& libs = target.GetLinkLibraries();
-    for(cmTarget::LinkLibraryVectorType::const_iterator i = libs.begin();
-        i != libs.end(); ++i)
-      {
-      if(cmTarget* depTarget = this->FindTarget(0, i->first.c_str(), false))
-        {
-        target.AddUtility(depTarget->GetName());
-        }
-      }
-    }
-#endif
-
-  // Look at each utility dependency.
-  for(std::set<cmStdString>::const_iterator ui =
-        target.GetUtilities().begin();
-      ui != target.GetUtilities().end(); ++ui)
-    {
-    if(cmTarget* depTarget = this->FindTarget(0, ui->c_str(), false))
-      {
-      if(depTarget->GetType() == cmTarget::STATIC_LIBRARY ||
-         depTarget->GetType() == cmTarget::SHARED_LIBRARY ||
-         depTarget->GetType() == cmTarget::MODULE_LIBRARY)
-        {
-        // This utility dependency will cause an attempt to link.  If
-        // the depender does not already link the dependee we need an
-        // intermediate target.
-        if(!this->CheckTargetLinks(target, ui->c_str()))
-          {
-          this->CreateUtilityDependTarget(*depTarget);
-          }
-        }
-      }
-    }
-}
-
-//----------------------------------------------------------------------------
-void
-cmGlobalVisualStudioGenerator::CreateUtilityDependTarget(cmTarget& target)
-{
-  // This target is a library on which a utility dependency exists.
-  // We need to create an intermediate custom target to hook up the
-  // dependency without causing a link.
-  const char* altName = target.GetProperty("ALTERNATIVE_DEPENDENCY_NAME");
-  if(!altName)
-    {
-    // Create the intermediate utility target.
-    std::string altNameStr = target.GetName();
-    altNameStr += "_UTILITY";
-    const std::vector<std::string> no_depends;
-    cmCustomCommandLines no_commands;
-    const char* no_working_dir = 0;
-    const char* no_comment = 0;
-    target.GetMakefile()->AddUtilityCommand(altNameStr.c_str(), true,
-                                            no_working_dir, no_depends,
-                                            no_commands, false, no_comment);
-    target.SetProperty("ALTERNATIVE_DEPENDENCY_NAME", altNameStr.c_str());
-
-    // Most targets have a GUID created in ConfigureFinalPass.  Since
-    // that has already been called, create one for this target now.
-    this->CreateGUID(altNameStr.c_str());
-
-    // The intermediate target should depend on the original target.
-    if(cmTarget* alt = this->FindTarget(0, altNameStr.c_str(), false))
-      {
-      alt->AddUtility(target.GetName());
-      }
-    }
-}
-
-//----------------------------------------------------------------------------
-bool cmGlobalVisualStudioGenerator::CheckTargetLinks(cmTarget& target,
-                                                     const char* name)
-{
-  // Return whether the given target links to a target with the given name.
-  if(target.GetType() == cmTarget::STATIC_LIBRARY)
-    {
-    // Static libraries never link to anything.
+  if (!this->cmGlobalGenerator::ComputeTargetDepends()) {
     return false;
-    }
-  cmTarget::LinkLibraryVectorType const& libs = target.GetLinkLibraries();
-  for(cmTarget::LinkLibraryVectorType::const_iterator i = libs.begin();
-      i != libs.end(); ++i)
-    {
-    if(i->first == name)
-      {
-      return true;
+  }
+  for (auto const& it : this->ProjectMap) {
+    for (const cmLocalGenerator* i : it.second) {
+      for (cmGeneratorTarget* ti : i->GetGeneratorTargets()) {
+        this->ComputeVSTargetDepends(ti);
       }
     }
-  return false;
+  }
+  return true;
 }
 
-//----------------------------------------------------------------------------
-const char*
-cmGlobalVisualStudioGenerator::GetUtilityForTarget(cmTarget& target,
-                                                   const char* name)
+static bool VSLinkable(cmGeneratorTarget const* t)
 {
-  // Handle the external MS project special case.
-  if(strncmp(name, "INCLUDE_EXTERNAL_MSPROJECT", 26) == 0)
-    {
-    // Note from Ken:
-    // kind of weird removing the first 27 letters.  my
-    // recommendatsions: use cmCustomCommand::GetCommand() to get the
-    // project name or get rid of the target name starting with
-    // "INCLUDE_EXTERNAL_MSPROJECT_" and use another indicator/flag
-    // somewhere.  These external project names shouldn't conflict
-    // with cmake target names anyways.
-    return name+27;
-    }
-
-  // Possibly depend on an intermediate utility target to avoid
-  // linking.
-  if(target.GetType() == cmTarget::STATIC_LIBRARY ||
-     target.GetType() == cmTarget::SHARED_LIBRARY ||
-     target.GetType() == cmTarget::MODULE_LIBRARY ||
-     target.GetType() == cmTarget::EXECUTABLE)
-    {
-    // The depender is a target that links.  Lookup the dependee to
-    // see if it provides an alternative dependency name.
-    if(cmTarget* depTarget = this->FindTarget(0, name, false))
-      {
-      // Check for an alternative name created by FixUtilityDepends.
-      if(const char* altName =
-         depTarget->GetProperty("ALTERNATIVE_DEPENDENCY_NAME"))
-        {
-        // The alternative name is needed only if the depender does
-        // not really link to the dependee.
-        if(!this->CheckTargetLinks(target, name))
-          {
-          return altName;
-          }
-        }
-      }
-    }
-
-  // No special case.  Just use the original dependency name.
-  return name;
+  return t->IsLinkable() || t->GetType() == cmStateEnums::OBJECT_LIBRARY;
 }
 
-//----------------------------------------------------------------------------
-#include <windows.h>
+void cmGlobalVisualStudioGenerator::ComputeVSTargetDepends(
+  cmGeneratorTarget* target)
+{
+  if (this->VSTargetDepends.find(target) != this->VSTargetDepends.end()) {
+    return;
+  }
+  VSDependSet& vsTargetDepend = this->VSTargetDepends[target];
+  // VS <= 7.1 has two behaviors that affect solution dependencies.
+  //
+  // (1) Solution-level dependencies between a linkable target and a
+  // library cause that library to be linked.  We use an intermedite
+  // empty utility target to express the dependency.  (VS 8 and above
+  // provide a project file "LinkLibraryDependencies" setting to
+  // choose whether to activate this behavior.  We disable it except
+  // when linking external project files.)
+  //
+  // (2) We cannot let static libraries depend directly on targets to
+  // which they "link" because the librarian tool will copy the
+  // targets into the static library.  While the work-around for
+  // behavior (1) would also avoid this, it would create a large
+  // number of extra utility targets for little gain.  Instead, use
+  // the above work-around only for dependencies explicitly added by
+  // the add_dependencies() command.  Approximate link dependencies by
+  // leaving them out for the static library itself but following them
+  // transitively for other targets.
 
-//----------------------------------------------------------------------------
+  bool allowLinkable = (target->GetType() != cmStateEnums::STATIC_LIBRARY &&
+                        target->GetType() != cmStateEnums::SHARED_LIBRARY &&
+                        target->GetType() != cmStateEnums::MODULE_LIBRARY &&
+                        target->GetType() != cmStateEnums::EXECUTABLE);
+
+  TargetDependSet const& depends = this->GetTargetDirectDepends(target);
+
+  // Collect implicit link dependencies (target_link_libraries).
+  // Static libraries cannot depend on their link implementation
+  // due to behavior (2), but they do not really need to.
+  std::set<cmGeneratorTarget const*> linkDepends;
+  if (target->GetType() != cmStateEnums::STATIC_LIBRARY) {
+    for (cmTargetDepend const& di : depends) {
+      if (di.IsLink()) {
+        this->FollowLinkDepends(di, linkDepends);
+      }
+    }
+  }
+
+  // Collect explicit util dependencies (add_dependencies).
+  std::set<cmGeneratorTarget const*> utilDepends;
+  for (cmTargetDepend const& di : depends) {
+    if (di.IsUtil()) {
+      this->FollowLinkDepends(di, utilDepends);
+    }
+  }
+
+  // Collect all targets linked by this target so we can avoid
+  // intermediate targets below.
+  TargetSet linked;
+  if (target->GetType() != cmStateEnums::STATIC_LIBRARY) {
+    linked = this->GetTargetLinkClosure(target);
+  }
+
+  // Emit link dependencies.
+  for (cmGeneratorTarget const* dep : linkDepends) {
+    vsTargetDepend.insert(dep->GetName());
+  }
+
+  // Emit util dependencies.  Possibly use intermediate targets.
+  for (cmGeneratorTarget const* dgt : utilDepends) {
+    if (allowLinkable || !VSLinkable(dgt) || linked.count(dgt)) {
+      // Direct dependency allowed.
+      vsTargetDepend.insert(dgt->GetName());
+    } else {
+      // Direct dependency on linkable target not allowed.
+      // Use an intermediate utility target.
+      vsTargetDepend.insert(this->GetUtilityDepend(dgt));
+    }
+  }
+}
+
+bool cmGlobalVisualStudioGenerator::FindMakeProgram(cmMakefile* mf)
+{
+  // Visual Studio generators know how to lookup their build tool
+  // directly instead of needing a helper module to do it, so we
+  // do not actually need to put CMAKE_MAKE_PROGRAM into the cache.
+  if (cmSystemTools::IsOff(mf->GetDefinition("CMAKE_MAKE_PROGRAM"))) {
+    mf->AddDefinition("CMAKE_MAKE_PROGRAM", this->GetVSMakeProgram().c_str());
+  }
+  return true;
+}
+
+std::string cmGlobalVisualStudioGenerator::GetUtilityDepend(
+  cmGeneratorTarget const* target)
+{
+  auto i = this->UtilityDepends.find(target);
+  if (i == this->UtilityDepends.end()) {
+    std::string name = this->WriteUtilityDepend(target);
+    UtilityDependsMap::value_type entry(target, name);
+    i = this->UtilityDepends.insert(entry).first;
+  }
+  return i->second;
+}
+
+std::string cmGlobalVisualStudioGenerator::GetStartupProjectName(
+  cmLocalGenerator const* root) const
+{
+  const char* n = root->GetMakefile()->GetProperty("VS_STARTUP_PROJECT");
+  if (n && *n) {
+    std::string startup = n;
+    if (this->FindTarget(startup)) {
+      return startup;
+    } else {
+      root->GetMakefile()->IssueMessage(
+        MessageType::AUTHOR_WARNING,
+        "Directory property VS_STARTUP_PROJECT specifies target "
+        "'" +
+          startup + "' that does not exist.  Ignoring.");
+    }
+  }
+
+  // default, if not specified
+  return this->GetAllTargetName();
+}
+
 bool IsVisualStudioMacrosFileRegistered(const std::string& macrosFile,
-  std::string& nextAvailableSubKeyName)
+                                        const std::string& regKeyBase,
+                                        std::string& nextAvailableSubKeyName)
 {
   bool macrosRegistered = false;
 
@@ -413,100 +545,90 @@ bool IsVisualStudioMacrosFileRegistered(const std::string& macrosFile,
   LONG result = ERROR_SUCCESS;
   DWORD index = 0;
 
-  keyname =
-    "Software\\Microsoft\\VisualStudio\\8.0\\vsmacros\\OtherProjects7";
+  keyname = regKeyBase + "\\OtherProjects7";
   hkey = NULL;
-  result = RegOpenKeyEx(HKEY_CURRENT_USER, keyname.c_str(),
-                        0, KEY_READ, &hkey);
-  if (ERROR_SUCCESS == result)
-    {
+  result =
+    RegOpenKeyExW(HKEY_CURRENT_USER, cmsys::Encoding::ToWide(keyname).c_str(),
+                  0, KEY_READ, &hkey);
+  if (ERROR_SUCCESS == result) {
     // Iterate the subkeys and look for the values of interest in each subkey:
-    CHAR subkeyname[256];
-    DWORD cch_subkeyname = sizeof(subkeyname)/sizeof(subkeyname[0]);
-    CHAR keyclass[256];
-    DWORD cch_keyclass = sizeof(keyclass)/sizeof(keyclass[0]);
+    wchar_t subkeyname[256];
+    DWORD cch_subkeyname = sizeof(subkeyname) * sizeof(subkeyname[0]);
+    wchar_t keyclass[256];
+    DWORD cch_keyclass = sizeof(keyclass) * sizeof(keyclass[0]);
     FILETIME lastWriteTime;
     lastWriteTime.dwHighDateTime = 0;
     lastWriteTime.dwLowDateTime = 0;
 
-    while (ERROR_SUCCESS == RegEnumKeyEx(hkey, index, subkeyname,
-                                         &cch_subkeyname,
-      0, keyclass, &cch_keyclass, &lastWriteTime))
-      {
+    while (ERROR_SUCCESS ==
+           RegEnumKeyExW(hkey, index, subkeyname, &cch_subkeyname, 0, keyclass,
+                         &cch_keyclass, &lastWriteTime)) {
       // Open the subkey and query the values of interest:
       HKEY hsubkey = NULL;
-      result = RegOpenKeyEx(hkey, subkeyname, 0, KEY_READ, &hsubkey);
-      if (ERROR_SUCCESS == result)
-        {
+      result = RegOpenKeyExW(hkey, subkeyname, 0, KEY_READ, &hsubkey);
+      if (ERROR_SUCCESS == result) {
         DWORD valueType = REG_SZ;
-        CHAR data1[256];
-        DWORD cch_data1 = sizeof(data1)/sizeof(data1[0]);
-        RegQueryValueEx(hsubkey, "Path", 0, &valueType,
-                        (LPBYTE) &data1[0], &cch_data1);
+        wchar_t data1[256];
+        DWORD cch_data1 = sizeof(data1) * sizeof(data1[0]);
+        RegQueryValueExW(hsubkey, L"Path", 0, &valueType, (LPBYTE)&data1[0],
+                         &cch_data1);
 
         DWORD data2 = 0;
         DWORD cch_data2 = sizeof(data2);
-        RegQueryValueEx(hsubkey, "Security", 0, &valueType,
-                        (LPBYTE) &data2, &cch_data2);
+        RegQueryValueExW(hsubkey, L"Security", 0, &valueType, (LPBYTE)&data2,
+                         &cch_data2);
 
         DWORD data3 = 0;
         DWORD cch_data3 = sizeof(data3);
-        RegQueryValueEx(hsubkey, "StorageFormat", 0, &valueType,
-                        (LPBYTE) &data3, &cch_data3);
+        RegQueryValueExW(hsubkey, L"StorageFormat", 0, &valueType,
+                         (LPBYTE)&data3, &cch_data3);
 
-        s2 = cmSystemTools::LowerCase(data1);
+        s2 = cmSystemTools::LowerCase(cmsys::Encoding::ToNarrow(data1));
         cmSystemTools::ConvertToUnixSlashes(s2);
-        if (s2 == s1)
-          {
+        if (s2 == s1) {
           macrosRegistered = true;
-          }
+        }
 
-        std::string fullname(data1);
+        std::string fullname = cmsys::Encoding::ToNarrow(data1);
         std::string filename;
         std::string filepath;
         std::string filepathname;
         std::string filepathpath;
-        if (cmSystemTools::FileExists(fullname.c_str()))
-          {
+        if (cmSystemTools::FileExists(fullname.c_str())) {
           filename = cmSystemTools::GetFilenameName(fullname);
           filepath = cmSystemTools::GetFilenamePath(fullname);
           filepathname = cmSystemTools::GetFilenameName(filepath);
           filepathpath = cmSystemTools::GetFilenamePath(filepath);
-          }
+        }
 
-        //std::cout << keyname << "\\" << subkeyname << ":" << std::endl;
-        //std::cout << "  Path: " << data1 << std::endl;
-        //std::cout << "  Security: " << data2 << std::endl;
-        //std::cout << "  StorageFormat: " << data3 << std::endl;
-        //std::cout << "  filename: " << filename << std::endl;
-        //std::cout << "  filepath: " << filepath << std::endl;
-        //std::cout << "  filepathname: " << filepathname << std::endl;
-        //std::cout << "  filepathpath: " << filepathpath << std::endl;
-        //std::cout << std::endl;
+        // std::cout << keyname << "\\" << subkeyname << ":" << std::endl;
+        // std::cout << "  Path: " << data1 << std::endl;
+        // std::cout << "  Security: " << data2 << std::endl;
+        // std::cout << "  StorageFormat: " << data3 << std::endl;
+        // std::cout << "  filename: " << filename << std::endl;
+        // std::cout << "  filepath: " << filepath << std::endl;
+        // std::cout << "  filepathname: " << filepathname << std::endl;
+        // std::cout << "  filepathpath: " << filepathpath << std::endl;
+        // std::cout << std::endl;
 
         RegCloseKey(hsubkey);
-        }
-      else
-        {
+      } else {
         std::cout << "error opening subkey: " << subkeyname << std::endl;
         std::cout << std::endl;
-        }
-
-      ++index;
-      cch_subkeyname = sizeof(subkeyname)/sizeof(subkeyname[0]);
-      cch_keyclass = sizeof(keyclass)/sizeof(keyclass[0]);
-      lastWriteTime.dwHighDateTime = 0;
-      lastWriteTime.dwLowDateTime = 0;
       }
 
-    RegCloseKey(hkey);
-    }
-  else
-    {
-    std::cout << "error opening key: " << keyname << std::endl;
-    std::cout << std::endl;
+      ++index;
+      cch_subkeyname = sizeof(subkeyname) * sizeof(subkeyname[0]);
+      cch_keyclass = sizeof(keyclass) * sizeof(keyclass[0]);
+      lastWriteTime.dwHighDateTime = 0;
+      lastWriteTime.dwLowDateTime = 0;
     }
 
+    RegCloseKey(hkey);
+  } else {
+    std::cout << "error opening key: " << keyname << std::endl;
+    std::cout << std::endl;
+  }
 
   // Pass back next available sub key name, assuming sub keys always
   // follow the expected naming scheme. Expected naming scheme is that
@@ -516,136 +638,124 @@ bool IsVisualStudioMacrosFileRegistered(const std::string& macrosFile,
   ossNext << index;
   nextAvailableSubKeyName = ossNext.str();
 
-
-  keyname =
-    "Software\\Microsoft\\VisualStudio\\8.0\\vsmacros\\RecordingProject7";
+  keyname = regKeyBase + "\\RecordingProject7";
   hkey = NULL;
-  result = RegOpenKeyEx(HKEY_CURRENT_USER, keyname.c_str(),
-                        0, KEY_READ, &hkey);
-  if (ERROR_SUCCESS == result)
-    {
+  result =
+    RegOpenKeyExW(HKEY_CURRENT_USER, cmsys::Encoding::ToWide(keyname).c_str(),
+                  0, KEY_READ, &hkey);
+  if (ERROR_SUCCESS == result) {
     DWORD valueType = REG_SZ;
-    CHAR data1[256];
-    DWORD cch_data1 = sizeof(data1)/sizeof(data1[0]);
-    RegQueryValueEx(hkey, "Path", 0, &valueType,
-                    (LPBYTE) &data1[0], &cch_data1);
+    wchar_t data1[256];
+    DWORD cch_data1 = sizeof(data1) * sizeof(data1[0]);
+    RegQueryValueExW(hkey, L"Path", 0, &valueType, (LPBYTE)&data1[0],
+                     &cch_data1);
 
     DWORD data2 = 0;
     DWORD cch_data2 = sizeof(data2);
-    RegQueryValueEx(hkey, "Security", 0, &valueType,
-                    (LPBYTE) &data2, &cch_data2);
+    RegQueryValueExW(hkey, L"Security", 0, &valueType, (LPBYTE)&data2,
+                     &cch_data2);
 
     DWORD data3 = 0;
     DWORD cch_data3 = sizeof(data3);
-    RegQueryValueEx(hkey, "StorageFormat", 0, &valueType,
-                    (LPBYTE) &data3, &cch_data3);
+    RegQueryValueExW(hkey, L"StorageFormat", 0, &valueType, (LPBYTE)&data3,
+                     &cch_data3);
 
-    s2 = cmSystemTools::LowerCase(data1);
+    s2 = cmSystemTools::LowerCase(cmsys::Encoding::ToNarrow(data1));
     cmSystemTools::ConvertToUnixSlashes(s2);
-    if (s2 == s1)
-      {
+    if (s2 == s1) {
       macrosRegistered = true;
-      }
+    }
 
-    //std::cout << keyname << ":" << std::endl;
-    //std::cout << "  Path: " << data1 << std::endl;
-    //std::cout << "  Security: " << data2 << std::endl;
-    //std::cout << "  StorageFormat: " << data3 << std::endl;
-    //std::cout << std::endl;
+    // std::cout << keyname << ":" << std::endl;
+    // std::cout << "  Path: " << data1 << std::endl;
+    // std::cout << "  Security: " << data2 << std::endl;
+    // std::cout << "  StorageFormat: " << data3 << std::endl;
+    // std::cout << std::endl;
 
     RegCloseKey(hkey);
-    }
-  else
-    {
+  } else {
     std::cout << "error opening key: " << keyname << std::endl;
     std::cout << std::endl;
-    }
+  }
 
   return macrosRegistered;
 }
 
-//----------------------------------------------------------------------------
-void WriteVSMacrosFileRegistryEntry(
-  const std::string& nextAvailableSubKeyName,
-  const std::string& macrosFile)
+void WriteVSMacrosFileRegistryEntry(const std::string& nextAvailableSubKeyName,
+                                    const std::string& macrosFile,
+                                    const std::string& regKeyBase)
 {
-  std::string keyname =
-    "Software\\Microsoft\\VisualStudio\\8.0\\vsmacros\\OtherProjects7";
+  std::string keyname = regKeyBase + "\\OtherProjects7";
   HKEY hkey = NULL;
-  LONG result = RegOpenKeyEx(HKEY_CURRENT_USER, keyname.c_str(), 0,
-    KEY_READ|KEY_WRITE, &hkey);
-  if (ERROR_SUCCESS == result)
-    {
+  LONG result =
+    RegOpenKeyExW(HKEY_CURRENT_USER, cmsys::Encoding::ToWide(keyname).c_str(),
+                  0, KEY_READ | KEY_WRITE, &hkey);
+  if (ERROR_SUCCESS == result) {
     // Create the subkey and set the values of interest:
     HKEY hsubkey = NULL;
-    result = RegCreateKeyEx(hkey, nextAvailableSubKeyName.c_str(), 0, "", 0,
-      KEY_READ|KEY_WRITE, 0, &hsubkey, 0);
-    if (ERROR_SUCCESS == result)
-      {
+    wchar_t lpClass[] = L"";
+    result = RegCreateKeyExW(
+      hkey, cmsys::Encoding::ToWide(nextAvailableSubKeyName).c_str(), 0,
+      lpClass, 0, KEY_READ | KEY_WRITE, 0, &hsubkey, 0);
+    if (ERROR_SUCCESS == result) {
       DWORD dw = 0;
 
       std::string s(macrosFile);
-      cmSystemTools::ReplaceString(s, "/", "\\");
+      std::replace(s.begin(), s.end(), '/', '\\');
+      std::wstring ws = cmsys::Encoding::ToWide(s);
 
-      result = RegSetValueEx(hsubkey, "Path", 0, REG_SZ, (LPBYTE) s.c_str(),
-        static_cast<DWORD>(strlen(s.c_str()) + 1));
-      if (ERROR_SUCCESS != result)
-        {
+      result =
+        RegSetValueExW(hsubkey, L"Path", 0, REG_SZ, (LPBYTE)ws.c_str(),
+                       static_cast<DWORD>(ws.size() + 1) * sizeof(wchar_t));
+      if (ERROR_SUCCESS != result) {
         std::cout << "error result 1: " << result << std::endl;
         std::cout << std::endl;
-        }
+      }
 
       // Security value is always "1" for sample macros files (seems to be "2"
       // if you put the file somewhere outside the standard VSMacros folder)
       dw = 1;
-      result = RegSetValueEx(hsubkey, "Security",
-                             0, REG_DWORD, (LPBYTE) &dw, sizeof(DWORD));
-      if (ERROR_SUCCESS != result)
-        {
+      result = RegSetValueExW(hsubkey, L"Security", 0, REG_DWORD, (LPBYTE)&dw,
+                              sizeof(DWORD));
+      if (ERROR_SUCCESS != result) {
         std::cout << "error result 2: " << result << std::endl;
         std::cout << std::endl;
-        }
+      }
 
       // StorageFormat value is always "0" for sample macros files
       dw = 0;
-      result = RegSetValueEx(hsubkey, "StorageFormat",
-                             0, REG_DWORD, (LPBYTE) &dw, sizeof(DWORD));
-      if (ERROR_SUCCESS != result)
-        {
+      result = RegSetValueExW(hsubkey, L"StorageFormat", 0, REG_DWORD,
+                              (LPBYTE)&dw, sizeof(DWORD));
+      if (ERROR_SUCCESS != result) {
         std::cout << "error result 3: " << result << std::endl;
         std::cout << std::endl;
-        }
+      }
 
       RegCloseKey(hsubkey);
-      }
-    else
-      {
-      std::cout << "error creating subkey: "
-                << nextAvailableSubKeyName << std::endl;
+    } else {
+      std::cout << "error creating subkey: " << nextAvailableSubKeyName
+                << std::endl;
       std::cout << std::endl;
-      }
-    RegCloseKey(hkey);
     }
-  else
-    {
+    RegCloseKey(hkey);
+  } else {
     std::cout << "error opening key: " << keyname << std::endl;
     std::cout << std::endl;
-    }
+  }
 }
 
-//----------------------------------------------------------------------------
-void RegisterVisualStudioMacros(const std::string& macrosFile)
+void RegisterVisualStudioMacros(const std::string& macrosFile,
+                                const std::string& regKeyBase)
 {
   bool macrosRegistered;
   std::string nextAvailableSubKeyName;
 
-  macrosRegistered = IsVisualStudioMacrosFileRegistered(macrosFile,
-    nextAvailableSubKeyName);
+  macrosRegistered = IsVisualStudioMacrosFileRegistered(
+    macrosFile, regKeyBase, nextAvailableSubKeyName);
 
-  if (!macrosRegistered)
-    {
-    int count = cmCallVisualStudioMacro::
-      GetNumberOfRunningVisualStudioInstances("ALL");
+  if (!macrosRegistered) {
+    int count =
+      cmCallVisualStudioMacro::GetNumberOfRunningVisualStudioInstances("ALL");
 
     // Only register the macros file if there are *no* instances of Visual
     // Studio running. If we register it while one is running, first, it has
@@ -654,43 +764,225 @@ void RegisterVisualStudioMacros(const std::string& macrosFile)
     // emit a warning asking the user to exit all running Visual Studio
     // instances...
     //
-    if (0 != count)
-      {
+    if (0 != count) {
       std::ostringstream oss;
       oss << "Could not register CMake's Visual Studio macros file '"
-        << CMAKE_VSMACROS_FILENAME "' while Visual Studio is running."
-        << " Please exit all running instances of Visual Studio before"
-        << " continuing." << std::endl
-        << std::endl
-        << "CMake needs to register Visual Studio macros when its macros"
-        << " file is updated or when it detects that its current macros file"
-        << " is no longer registered with Visual Studio."
-        << std::endl;
-      cmSystemTools::Message(oss.str().c_str(), "Warning");
+          << CMAKE_VSMACROS_FILENAME "' while Visual Studio is running."
+          << " Please exit all running instances of Visual Studio before"
+          << " continuing." << std::endl
+          << std::endl
+          << "CMake needs to register Visual Studio macros when its macros"
+          << " file is updated or when it detects that its current macros file"
+          << " is no longer registered with Visual Studio." << std::endl;
+      cmSystemTools::Message(oss.str(), "Warning");
 
       // Count them again now that the warning is over. In the case of a GUI
       // warning, the user may have gone to close Visual Studio and then come
       // back to the CMake GUI and clicked ok on the above warning. If so,
       // then register the macros *now* if the count is *now* 0...
       //
-      count = cmCallVisualStudioMacro::
-        GetNumberOfRunningVisualStudioInstances("ALL");
+      count = cmCallVisualStudioMacro::GetNumberOfRunningVisualStudioInstances(
+        "ALL");
 
       // Also re-get the nextAvailableSubKeyName in case Visual Studio
       // wrote out new registered macros information as it was exiting:
       //
-      if (0 == count)
-        {
-        IsVisualStudioMacrosFileRegistered(macrosFile,
-          nextAvailableSubKeyName);
-        }
+      if (0 == count) {
+        IsVisualStudioMacrosFileRegistered(macrosFile, regKeyBase,
+                                           nextAvailableSubKeyName);
       }
+    }
 
     // Do another if check - 'count' may have changed inside the above if:
     //
-    if (0 == count)
-      {
-      WriteVSMacrosFileRegistryEntry(nextAvailableSubKeyName, macrosFile);
+    if (0 == count) {
+      WriteVSMacrosFileRegistryEntry(nextAvailableSubKeyName, macrosFile,
+                                     regKeyBase);
+    }
+  }
+}
+bool cmGlobalVisualStudioGenerator::TargetIsFortranOnly(
+  cmGeneratorTarget const* gt)
+{
+  // check to see if this is a fortran build
+  {
+    // Issue diagnostic if the source files depend on the config.
+    std::vector<cmSourceFile*> sources;
+    if (!gt->GetConfigCommonSourceFiles(sources)) {
+      return false;
+    }
+  }
+
+  // If there's only one source language, Fortran has to be used
+  // in order for the sources to compile.
+  std::set<std::string> languages;
+  gt->GetLanguages(languages, "");
+  // Consider an explicit linker language property, but *not* the
+  // computed linker language that may depend on linked targets.
+  // This allows the project to control the language choice in
+  // a target with none of its own sources, e.g. when also using
+  // object libraries.
+  const char* linkLang = gt->GetProperty("LINKER_LANGUAGE");
+  if (linkLang && *linkLang) {
+    languages.insert(linkLang);
+  }
+
+  // Intel Fortran .vfproj files do support the resource compiler.
+  languages.erase("RC");
+
+  return languages.size() == 1 && *languages.begin() == "Fortran";
+}
+
+bool cmGlobalVisualStudioGenerator::TargetCompare::operator()(
+  cmGeneratorTarget const* l, cmGeneratorTarget const* r) const
+{
+  // Make sure a given named target is ordered first,
+  // e.g. to set ALL_BUILD as the default active project.
+  // When the empty string is named this is a no-op.
+  if (r->GetName() == this->First) {
+    return false;
+  }
+  if (l->GetName() == this->First) {
+    return true;
+  }
+  return l->GetName() < r->GetName();
+}
+
+cmGlobalVisualStudioGenerator::OrderedTargetDependSet::OrderedTargetDependSet(
+  TargetDependSet const& targets, std::string const& first)
+  : derived(TargetCompare(first))
+{
+  this->insert(targets.begin(), targets.end());
+}
+
+cmGlobalVisualStudioGenerator::OrderedTargetDependSet::OrderedTargetDependSet(
+  TargetSet const& targets, std::string const& first)
+  : derived(TargetCompare(first))
+{
+  for (cmGeneratorTarget const* it : targets) {
+    this->insert(it);
+  }
+}
+
+std::string cmGlobalVisualStudioGenerator::ExpandCFGIntDir(
+  const std::string& str, const std::string& config) const
+{
+  std::string replace = GetCMakeCFGIntDir();
+
+  std::string tmp = str;
+  for (std::string::size_type i = tmp.find(replace); i != std::string::npos;
+       i = tmp.find(replace, i)) {
+    tmp.replace(i, replace.size(), config);
+    i += config.size();
+  }
+  return tmp;
+}
+
+void cmGlobalVisualStudioGenerator::AddSymbolExportCommand(
+  cmGeneratorTarget* gt, std::vector<cmCustomCommand>& commands,
+  std::string const& configName)
+{
+  cmGeneratorTarget::ModuleDefinitionInfo const* mdi =
+    gt->GetModuleDefinitionInfo(configName);
+  if (!mdi || !mdi->DefFileGenerated) {
+    return;
+  }
+
+  std::vector<std::string> outputs;
+  outputs.push_back(mdi->DefFile);
+  std::vector<std::string> empty;
+  std::vector<cmSourceFile const*> objectSources;
+  gt->GetObjectSources(objectSources, configName);
+  std::map<cmSourceFile const*, std::string> mapping;
+  for (cmSourceFile const* it : objectSources) {
+    mapping[it];
+  }
+  gt->LocalGenerator->ComputeObjectFilenames(mapping, gt);
+  std::string obj_dir = gt->ObjectDirectory;
+  std::string cmakeCommand = cmSystemTools::GetCMakeCommand();
+  cmSystemTools::ConvertToWindowsExtendedPath(cmakeCommand);
+  cmCustomCommandLine cmdl;
+  cmdl.push_back(cmakeCommand);
+  cmdl.push_back("-E");
+  cmdl.push_back("__create_def");
+  cmdl.push_back(mdi->DefFile);
+  std::string obj_dir_expanded = obj_dir;
+  cmSystemTools::ReplaceString(obj_dir_expanded, this->GetCMakeCFGIntDir(),
+                               configName.c_str());
+  cmSystemTools::MakeDirectory(obj_dir_expanded);
+  std::string const objs_file = obj_dir_expanded + "/objects.txt";
+  cmdl.push_back(objs_file);
+  cmGeneratedFileStream fout(objs_file.c_str());
+  if (!fout) {
+    cmSystemTools::Error("could not open " + objs_file);
+    return;
+  }
+
+  if (mdi->WindowsExportAllSymbols) {
+    std::vector<std::string> objs;
+    for (cmSourceFile const* it : objectSources) {
+      // Find the object file name corresponding to this source file.
+      // It must exist because we populated the mapping just above.
+      const auto& v = mapping[it];
+      assert(!v.empty());
+      std::string objFile = obj_dir + v;
+      objs.push_back(objFile);
+    }
+    std::vector<cmSourceFile const*> externalObjectSources;
+    gt->GetExternalObjects(externalObjectSources, configName);
+    for (cmSourceFile const* it : externalObjectSources) {
+      objs.push_back(it->GetFullPath());
+    }
+
+    for (std::string const& it : objs) {
+      std::string objFile = it;
+      // replace $(ConfigurationName) in the object names
+      cmSystemTools::ReplaceString(objFile, this->GetCMakeCFGIntDir(),
+                                   configName.c_str());
+      if (cmHasLiteralSuffix(objFile, ".obj")) {
+        fout << objFile << "\n";
       }
     }
+  }
+
+  for (cmSourceFile const* i : mdi->Sources) {
+    fout << i->GetFullPath() << "\n";
+  }
+
+  cmCustomCommandLines commandLines;
+  commandLines.push_back(cmdl);
+  cmCustomCommand command(gt->Target->GetMakefile(), outputs, empty, empty,
+                          commandLines, "Auto build dll exports", ".");
+  commands.push_back(command);
+}
+
+static bool OpenSolution(std::string sln)
+{
+  HRESULT comInitialized =
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  if (FAILED(comInitialized)) {
+    return false;
+  }
+
+  HINSTANCE hi =
+    ShellExecuteA(NULL, "open", sln.c_str(), NULL, NULL, SW_SHOWNORMAL);
+
+  CoUninitialize();
+
+  return reinterpret_cast<intptr_t>(hi) > 32;
+}
+
+bool cmGlobalVisualStudioGenerator::Open(const std::string& bindir,
+                                         const std::string& projectName,
+                                         bool dryRun)
+{
+  std::string sln = bindir + "/" + projectName + ".sln";
+
+  if (dryRun) {
+    return cmSystemTools::FileExists(sln, true);
+  }
+
+  sln = cmSystemTools::ConvertToOutputPath(sln);
+
+  return std::async(std::launch::async, OpenSolution, sln).get();
 }

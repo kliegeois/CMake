@@ -1,106 +1,66 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmInstallExportGenerator_h
 #define cmInstallExportGenerator_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmInstallGenerator.h"
+#include "cmScriptGenerator.h"
 
-class cmTarget;
+#include <iosfwd>
+#include <stddef.h>
+#include <string>
+#include <vector>
 
-
-class cmInstallTargetGenerator;
-class cmInstallFilesGenerator;
-
-/* cmInstallExportTarget is used in cmGlobalGenerator to collect the 
-install generators for the exported targets. These are then used by the 
-cmInstallExportGenerator.
-*/
-class cmTargetExport
-{
-public:
-  cmTargetExport(cmTarget* tgt, 
-                 cmInstallTargetGenerator* archive, 
-                 cmInstallTargetGenerator* runtime, 
-                 cmInstallTargetGenerator* library,
-                 cmInstallTargetGenerator* framework,
-                 cmInstallTargetGenerator* bundle,
-                 cmInstallFilesGenerator* headers
-                ) : Target(tgt), ArchiveGenerator(archive),
-                    RuntimeGenerator(runtime), LibraryGenerator(library),
-                    FrameworkGenerator(framework), BundleGenerator(bundle),
-                    HeaderGenerator(headers) {}
-
-  cmTarget* Target;
-  cmInstallTargetGenerator* ArchiveGenerator;
-  cmInstallTargetGenerator* RuntimeGenerator;
-  cmInstallTargetGenerator* LibraryGenerator;
-  cmInstallTargetGenerator* FrameworkGenerator;
-  cmInstallTargetGenerator* BundleGenerator;
-  cmInstallFilesGenerator* HeaderGenerator;
-private:
-  cmTargetExport();
-};
-
+class cmExportInstallFileGenerator;
+class cmExportSet;
+class cmLocalGenerator;
 
 /** \class cmInstallExportGenerator
  * \brief Generate rules for creating an export files.
  */
-class cmInstallExportGenerator: public cmInstallGenerator
+class cmInstallExportGenerator : public cmInstallGenerator
 {
 public:
-  cmInstallExportGenerator(const char* dest, const char* file_permissions,
+  cmInstallExportGenerator(cmExportSet* exportSet, const char* dest,
+                           const char* file_permissions,
                            const std::vector<std::string>& configurations,
-                           const char* component,
-                           const char* filename, const char* prefix, 
-                           const char* tempOutputDir);
+                           const char* component, MessageLevel message,
+                           bool exclude_from_all, const char* filename,
+                           const char* name_space, bool exportOld,
+                           bool android);
+  ~cmInstallExportGenerator() override;
 
-  bool SetExportSet(const char* name, 
-                    const std::vector<cmTargetExport*>* exportSet);
+  cmExportSet* GetExportSet() { return this->ExportSet; }
+
+  bool Compute(cmLocalGenerator* lg) override;
+
+  cmLocalGenerator* GetLocalGenerator() const { return this->LocalGenerator; }
+
+  const std::string& GetNamespace() const { return this->Namespace; }
+
+  std::string const& GetDestination() const { return this->Destination; }
+
 protected:
-  // internal class which collects all the properties which will be set
-  // in the export file for the target
-  class cmTargetWithProperties
-  {
-  public:
-    cmTargetWithProperties(cmTarget* target):Target(target) {}
-    cmTarget* Target;
-    std::map<std::string, std::string> Properties;
-  private:
-    cmTargetWithProperties();
-  };
+  void GenerateScript(std::ostream& os) override;
+  void GenerateScriptConfigs(std::ostream& os, Indent indent) override;
+  void GenerateScriptActions(std::ostream& os, Indent indent) override;
+  void GenerateImportFile(cmExportSet const* exportSet);
+  void GenerateImportFile(const char* config, cmExportSet const* exportSet);
+  void ComputeTempDir();
+  size_t GetMaxConfigLength() const;
 
-  typedef cmInstallGeneratorIndent Indent;
-  virtual void GenerateScript(std::ostream& os);
-  virtual void GenerateScriptActions(std::ostream& os, Indent const& indent);
-  static bool AddInstallLocations(cmTargetWithProperties *twp, 
-                                  cmInstallTargetGenerator* generator,
-                                  const char* prefix);
-  static bool AddInstallLocations(cmTargetWithProperties* twp,
-                                           cmInstallFilesGenerator* generator,
-                                           const char* propertyName);
-
-  std::string Name;
+  cmExportSet* ExportSet;
   std::string FilePermissions;
-  std::string Filename;
-  std::string Prefix;
-  std::string TempOutputDir;
-  std::string ExportFilename;
+  std::string FileName;
+  std::string Namespace;
+  bool ExportOld;
+  cmLocalGenerator* LocalGenerator;
 
-  std::vector<cmTargetWithProperties*> Targets;
+  std::string TempDir;
+  std::string MainImportFile;
+  cmExportInstallFileGenerator* EFGen;
 };
 
 #endif

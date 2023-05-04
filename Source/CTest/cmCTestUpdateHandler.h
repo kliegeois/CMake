@@ -1,30 +1,15 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCTestUpdateHandler_h
 #define cmCTestUpdateHandler_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
 
 #include "cmCTestGenericHandler.h"
-#include "cmListFileCache.h"
 
-#if defined(__sgi) && !defined(__GNUC__)
-# pragma set woff 1375 /* base class destructor not virtual */
-#endif
+#include <string>
+#include <utility>
+#include <vector>
 
 /** \class cmCTestUpdateHandler
  * \brief A class that handles ctest -S invocations
@@ -33,41 +18,50 @@
 class cmCTestUpdateHandler : public cmCTestGenericHandler
 {
 public:
-  cmTypeMacro(cmCTestUpdateHandler, cmCTestGenericHandler);
+  typedef cmCTestGenericHandler Superclass;
 
   /*
    * The main entry point for this class
    */
-  int ProcessHandler();
+  int ProcessHandler() override;
 
   cmCTestUpdateHandler();
 
-  enum {
+  enum
+  {
     e_UNKNOWN = 0,
     e_CVS,
     e_SVN,
+    e_BZR,
+    e_GIT,
+    e_HG,
+    e_P4,
     e_LAST
   };
 
   /**
    * Initialize handler
    */
-  virtual void Initialize();
+  void Initialize() override;
 
 private:
   // Some structures needed for update
-  struct StringPair :
-    public std::pair<std::string, std::string>{};
-  struct UpdateFiles : public std::vector<StringPair>{};
-  struct AuthorsToUpdatesMap :
-    public std::map<std::string, UpdateFiles>{};
+  struct StringPair : public std::pair<std::string, std::string>
+  {
+  };
+  struct UpdateFiles : public std::vector<StringPair>
+  {
+  };
 
   // Determine the type of version control
   int DetermineType(const char* cmd, const char* type);
-};
 
-#if defined(__sgi) && !defined(__GNUC__)
-# pragma reset woff 1375 /* base class destructor not virtual */
-#endif
+  // The VCS command to update the working tree.
+  std::string UpdateCommand;
+  int UpdateType;
+
+  int DetectVCS(const char* dir);
+  bool SelectVCS();
+};
 
 #endif

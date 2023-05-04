@@ -1,61 +1,53 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmCPackGeneratorFactory_h
 #define cmCPackGeneratorFactory_h
 
-#include "cmObject.h"
+#include "cmConfigure.h" // IWYU pragma: keep
 
-class cmCPackLog;
+#include <map>
+#include <string>
+#include <vector>
+
 class cmCPackGenerator;
+class cmCPackLog;
 
 /** \class cmCPackGeneratorFactory
  * \brief A container for CPack generators
  *
  */
-class cmCPackGeneratorFactory : public cmObject
+class cmCPackGeneratorFactory
 {
 public:
-  cmTypeMacro(cmCPackGeneratorFactory, cmObject);
-
   cmCPackGeneratorFactory();
   ~cmCPackGeneratorFactory();
 
+  cmCPackGeneratorFactory(const cmCPackGeneratorFactory&) = delete;
+  cmCPackGeneratorFactory& operator=(const cmCPackGeneratorFactory&) = delete;
+
   //! Get the generator
-  cmCPackGenerator* NewGenerator(const char* name);
+  cmCPackGenerator* NewGenerator(const std::string& name);
   void DeleteGenerator(cmCPackGenerator* gen);
 
   typedef cmCPackGenerator* CreateGeneratorCall();
 
-  void RegisterGenerator(const char* name,
-    const char* generatorDescription,
-    CreateGeneratorCall* createGenerator);
+  void RegisterGenerator(const std::string& name,
+                         const char* generatorDescription,
+                         CreateGeneratorCall* createGenerator);
 
   void SetLogger(cmCPackLog* logger) { this->Logger = logger; }
 
-  typedef std::map<cmStdString, cmStdString> DescriptionsMap;
+  typedef std::map<std::string, std::string> DescriptionsMap;
   const DescriptionsMap& GetGeneratorsList() const
-    { return this->GeneratorDescriptions; }
+  {
+    return this->GeneratorDescriptions;
+  }
 
 private:
-  cmCPackGenerator* NewGeneratorInternal(const char* name);
+  cmCPackGenerator* NewGeneratorInternal(const std::string& name);
   std::vector<cmCPackGenerator*> Generators;
 
-  typedef std::map<cmStdString, CreateGeneratorCall*> t_GeneratorCreatorsMap;
+  typedef std::map<std::string, CreateGeneratorCall*> t_GeneratorCreatorsMap;
   t_GeneratorCreatorsMap GeneratorCreators;
   DescriptionsMap GeneratorDescriptions;
   cmCPackLog* Logger;

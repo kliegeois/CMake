@@ -1,27 +1,38 @@
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-SET( CURSES_SRCS
-              CursesDialog/cmCursesBoolWidget
-              CursesDialog/cmCursesCacheEntryComposite
-              CursesDialog/cmCursesDummyWidget
-              CursesDialog/cmCursesFilePathWidget
-              CursesDialog/cmCursesForm
-              CursesDialog/cmCursesLabelWidget
-              CursesDialog/cmCursesLongMessageForm
-              CursesDialog/cmCursesMainForm
-              CursesDialog/cmCursesPathWidget
-              CursesDialog/cmCursesStringWidget
-              CursesDialog/cmCursesWidget
-              CursesDialog/ccmake
+set( CURSES_SRCS
+              CursesDialog/cmCursesOptionsWidget.cxx
+              CursesDialog/cmCursesBoolWidget.cxx
+              CursesDialog/cmCursesCacheEntryComposite.cxx
+              CursesDialog/cmCursesDummyWidget.cxx
+              CursesDialog/cmCursesFilePathWidget.cxx
+              CursesDialog/cmCursesForm.cxx
+              CursesDialog/cmCursesLabelWidget.cxx
+              CursesDialog/cmCursesLongMessageForm.cxx
+              CursesDialog/cmCursesMainForm.cxx
+              CursesDialog/cmCursesPathWidget.cxx
+              CursesDialog/cmCursesStringWidget.cxx
+              CursesDialog/cmCursesWidget.cxx
+              CursesDialog/ccmake.cxx
    )
 
-INCLUDE_DIRECTORIES(${CMake_SOURCE_DIR}/Source/CursesDialog/form
-                    ${CMake_BINARY_DIR}/Source/CursesDialog/form)
-LINK_DIRECTORIES(${CMake_BINARY_DIR}/Source/CursesDialog/form)
-INCLUDE_DIRECTORIES(${CURSES_INCLUDE_PATH})
+include_directories(${CURSES_INCLUDE_PATH})
 
 
-ADD_EXECUTABLE(ccmake ${CURSES_SRCS} )
-TARGET_LINK_LIBRARIES(ccmake CMakeLib)
-TARGET_LINK_LIBRARIES(ccmake cmForm)
+add_executable(ccmake ${CURSES_SRCS} )
+target_link_libraries(ccmake CMakeLib)
+if(CMAKE_USE_SYSTEM_FORM)
+  target_link_libraries(ccmake
+    ${CURSES_FORM_LIBRARY}
+    ${CURSES_LIBRARY}
+  )
+  if(CURSES_EXTRA_LIBRARY)
+    target_link_libraries(ccmake ${CURSES_EXTRA_LIBRARY})
+  endif()
+else()
+  target_link_libraries(ccmake cmForm)
+endif()
 
-INSTALL_TARGETS(/bin ccmake)
+CMake_OPTIONAL_COMPONENT(ccmake)
+install(TARGETS ccmake DESTINATION ${CMAKE_BIN_DIR} ${COMPONENT})

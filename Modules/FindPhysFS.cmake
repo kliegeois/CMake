@@ -1,68 +1,42 @@
-# Locate PhysFS library
-# This module defines
-# PHYSFS_LIBRARY, the name of the library to link against
-# PHYSFS_FOUND, if false, do not try to link to PHYSFS
-# PHYSFS_INCLUDE_DIR, where to find physfs.h
-#
-# $PHYSFSDIR is an environment variable that would
-# correspond to the ./configure --prefix=$PHYSFSDIR
-# used in building PHYSFS.
-#
-# Created by Eric Wing. 
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-FIND_PATH(PHYSFS_INCLUDE_DIR physfs.h
-  PATHS
-  $ENV{PHYSFSDIR}
-  NO_DEFAULT_PATH
-  PATH_SUFFIXES include
-)
-FIND_PATH(PHYSFS_INCLUDE_DIR physfs.h
-  PATHS ${CMAKE_PREFIX_PATH} # Unofficial: We are proposing this.
-  NO_DEFAULT_PATH
-  PATH_SUFFIXES include
-)
-FIND_PATH(PHYSFS_INCLUDE_DIR physfs.h
-  PATHS
-  ~/Library/Frameworks
-  /Library/Frameworks
-  /usr/local
-  /usr
-  /sw # Fink
-  /opt/local # DarwinPorts
-  /opt/csw # Blastwave
-  /opt
+#[=======================================================================[.rst:
+FindPhysFS
+----------
+
+
+
+Locate PhysFS library This module defines PHYSFS_LIBRARY, the name of
+the library to link against PHYSFS_FOUND, if false, do not try to link
+to PHYSFS PHYSFS_INCLUDE_DIR, where to find physfs.h
+
+$PHYSFSDIR is an environment variable that would correspond to the
+./configure --prefix=$PHYSFSDIR used in building PHYSFS.
+
+Created by Eric Wing.
+#]=======================================================================]
+
+find_path(PHYSFS_INCLUDE_DIR physfs.h
+  HINTS
+    ENV PHYSFSDIR
   PATH_SUFFIXES include/physfs include
-)
-
-FIND_LIBRARY(PHYSFS_LIBRARY 
-  NAMES physfs
-  PATHS
-  $ENV{PHYSFSDIR}
-  NO_DEFAULT_PATH
-    PATH_SUFFIXES lib64 lib
-)
-FIND_LIBRARY(PHYSFS_LIBRARY 
-  NAMES physfs
-  PATHS ${CMAKE_PREFIX_PATH} # Unofficial: We are proposing this.
-    NO_DEFAULT_PATH
-    PATH_SUFFIXES lib64 lib
-)
-FIND_LIBRARY(PHYSFS_LIBRARY 
-  NAMES physfs
   PATHS
   ~/Library/Frameworks
   /Library/Frameworks
-  /usr/local
-  /usr
-  /sw
-  /opt/local
-  /opt/csw
   /opt
-    PATH_SUFFIXES lib64 lib
 )
 
-SET(PHYSFS_FOUND "NO")
-IF(PHYSFS_LIBRARY AND PHYSFS_INCLUDE_DIR)
-  SET(PHYSFS_FOUND "YES")
-ENDIF(PHYSFS_LIBRARY AND PHYSFS_INCLUDE_DIR)
+find_library(PHYSFS_LIBRARY
+  NAMES physfs
+  HINTS
+    ENV PHYSFSDIR
+  PATH_SUFFIXES lib
+  PATHS
+  ~/Library/Frameworks
+  /Library/Frameworks
+  /opt
+)
 
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(PhysFS DEFAULT_MSG PHYSFS_LIBRARY PHYSFS_INCLUDE_DIR)

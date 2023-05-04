@@ -1,90 +1,94 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCursesCacheEntryComposite.h"
-#include "cmCursesStringWidget.h"
-#include "cmCursesLabelWidget.h"
-#include "cmCursesBoolWidget.h"
-#include "cmCursesPathWidget.h"
-#include "cmCursesFilePathWidget.h"
-#include "cmCursesDummyWidget.h"
-#include "../cmSystemTools.h"
 
-cmCursesCacheEntryComposite::cmCursesCacheEntryComposite(const char* key,
-                                                         int labelwidth, 
-                                                         int entrywidth) :
-  Key(key), LabelWidth(labelwidth), EntryWidth(entrywidth)
+#include "cmCursesBoolWidget.h"
+#include "cmCursesFilePathWidget.h"
+#include "cmCursesLabelWidget.h"
+#include "cmCursesOptionsWidget.h"
+#include "cmCursesPathWidget.h"
+#include "cmCursesStringWidget.h"
+#include "cmCursesWidget.h"
+#include "cmState.h"
+#include "cmStateTypes.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
+
+#include <assert.h>
+#include <vector>
+
+cmCursesCacheEntryComposite::cmCursesCacheEntryComposite(
+  const std::string& key, int labelwidth, int entrywidth)
+  : Key(key)
+  , LabelWidth(labelwidth)
+  , EntryWidth(entrywidth)
 {
   this->Label = new cmCursesLabelWidget(this->LabelWidth, 1, 1, 1, key);
   this->IsNewLabel = new cmCursesLabelWidget(1, 1, 1, 1, " ");
-  this->Entry = 0;
+  this->Entry = nullptr;
+  this->Entry = new cmCursesStringWidget(this->EntryWidth, 1, 1, 1);
 }
 
 cmCursesCacheEntryComposite::cmCursesCacheEntryComposite(
-  const char* key, const cmCacheManager::CacheIterator& it, bool isNew, 
-  int labelwidth, int entrywidth) 
-  : Key(key), LabelWidth(labelwidth), EntryWidth(entrywidth)
+  const std::string& key, cmake* cm, bool isNew, int labelwidth,
+  int entrywidth)
+  : Key(key)
+  , LabelWidth(labelwidth)
+  , EntryWidth(entrywidth)
 {
   this->Label = new cmCursesLabelWidget(this->LabelWidth, 1, 1, 1, key);
-  if (isNew)
-    {
+  if (isNew) {
     this->IsNewLabel = new cmCursesLabelWidget(1, 1, 1, 1, "*");
-    }
-  else
-    {
+  } else {
     this->IsNewLabel = new cmCursesLabelWidget(1, 1, 1, 1, " ");
-    }
+  }
 
-  this->Entry = 0;
-  switch ( it.GetType() )
-    {
-    case  cmCacheManager::BOOL:
+  this->Entry = nullptr;
+  const char* value = cm->GetState()->GetCacheEntryValue(key);
+  assert(value);
+  switch (cm->GetState()->GetCacheEntryType(key)) {
+    case cmStateEnums::BOOL:
       this->Entry = new cmCursesBoolWidget(this->EntryWidth, 1, 1, 1);
-      if (cmSystemTools::IsOn(it.GetValue()))
-        {
+      if (cmSystemTools::IsOn(value)) {
         static_cast<cmCursesBoolWidget*>(this->Entry)->SetValueAsBool(true);
-        }
-      else
-        {
+      } else {
         static_cast<cmCursesBoolWidget*>(this->Entry)->SetValueAsBool(false);
-        }
+      }
       break;
-    case cmCacheManager::PATH:
+    case cmStateEnums::PATH:
       this->Entry = new cmCursesPathWidget(this->EntryWidth, 1, 1, 1);
-      static_cast<cmCursesPathWidget*>(this->Entry)->SetString(
-        it.GetValue());
+      static_cast<cmCursesPathWidget*>(this->Entry)->SetString(value);
       break;
-    case cmCacheManager::FILEPATH:
+    case cmStateEnums::FILEPATH:
       this->Entry = new cmCursesFilePathWidget(this->EntryWidth, 1, 1, 1);
-      static_cast<cmCursesFilePathWidget*>(this->Entry)->SetString(
-        it.GetValue());
+      static_cast<cmCursesFilePathWidget*>(this->Entry)->SetString(value);
       break;
-    case cmCacheManager::STRING:
-      this->Entry = new cmCursesStringWidget(this->EntryWidth, 1, 1, 1);
-      static_cast<cmCursesStringWidget*>(this->Entry)->SetString(
-        it.GetValue());
+    case cmStateEnums::STRING: {
+      const char* stringsProp =
+        cm->GetState()->GetCacheEntryProperty(key, "STRINGS");
+      if (stringsProp) {
+        cmCursesOptionsWidget* ow =
+          new cmCursesOptionsWidget(this->EntryWidth, 1, 1, 1);
+        this->Entry = ow;
+        std::vector<std::string> options;
+        cmSystemTools::ExpandListArgument(stringsProp, options);
+        for (auto const& opt : options) {
+          ow->AddOption(opt);
+        }
+        ow->SetOption(value);
+      } else {
+        this->Entry = new cmCursesStringWidget(this->EntryWidth, 1, 1, 1);
+        static_cast<cmCursesStringWidget*>(this->Entry)->SetString(value);
+      }
       break;
-    case cmCacheManager::UNINITIALIZED:
-      cmSystemTools::Error("Found an undefined variable: ", it.GetName());      
+    }
+    case cmStateEnums::UNINITIALIZED:
+      cmSystemTools::Error("Found an undefined variable: ", key.c_str());
       break;
     default:
       // TODO : put warning message here
       break;
-    }
-
+  }
 }
 
 cmCursesCacheEntryComposite::~cmCursesCacheEntryComposite()
@@ -96,12 +100,8 @@ cmCursesCacheEntryComposite::~cmCursesCacheEntryComposite()
 
 const char* cmCursesCacheEntryComposite::GetValue()
 {
-  if (this->Label)
-    {
+  if (this->Label) {
     return this->Label->GetValue();
-    }
-  else
-    {
-    return 0;
-    }
+  }
+  return nullptr;
 }

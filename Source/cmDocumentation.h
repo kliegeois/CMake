@@ -1,53 +1,37 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef _cmDocumentation_h
 #define _cmDocumentation_h
 
-#include "cmStandardIncludes.h"
-#include "cmProperty.h"
+#include "cmConfigure.h" // IWYU pragma: keep
+
 #include "cmDocumentationFormatter.h"
-#include "cmDocumentationFormatterHTML.h"
-#include "cmDocumentationFormatterMan.h"
-#include "cmDocumentationFormatterText.h"
-#include "cmDocumentationFormatterUsage.h"
 #include "cmDocumentationSection.h"
 
-namespace cmsys
-{
-  class Directory;
-}
+#include <iosfwd>
+#include <map>
+#include <string>
+#include <vector>
+
+struct cmDocumentationEntry;
 
 /** Class to generate documentation.  */
-class cmDocumentation: public cmDocumentationEnums
+class cmDocumentation : public cmDocumentationEnums
 {
 public:
   cmDocumentation();
-  
-  ~cmDocumentation();
-  // High-level interface for standard documents:
-  
+
   /**
    * Check command line arguments for documentation options.  Returns
    * true if documentation options are found, and false otherwise.
    * When true is returned, PrintRequestedDocumentation should be
-   * called.
+   * called.  exitOpt can be used for things like cmake -E, so that
+   * all arguments after the -E are ignored and not searched for
+   * help arguments.
    */
-  bool CheckOptions(int argc, const char* const* argv);
-  
+  bool CheckOptions(int argc, const char* const* argv,
+                    const char* exitOpt = nullptr);
+
   /**
    * Print help requested on the command line.  Call after
    * CheckOptions returns true.  Returns true on success, and false
@@ -55,133 +39,91 @@ public:
    * command line cannot be written.
    */
   bool PrintRequestedDocumentation(std::ostream& os);
-  
+
   /** Print help of the given type.  */
   bool PrintDocumentation(Type ht, std::ostream& os);
-  
+
+  void SetShowGenerators(bool showGen) { this->ShowGenerators = showGen; }
+
   /** Set the program name for standard document generation.  */
-  void SetName(const char* name);
+  void SetName(const std::string& name);
 
   /** Set a section of the documentation. Typical sections include Name,
-      Usage, Description, Options, SeeAlso */
-  void SetSection(const char *sectionName,
-                  cmDocumentationSection *section);
-  void SetSection(const char *sectionName,
-                  std::vector<cmDocumentationEntry> &docs);
-  void SetSection(const char *sectionName,
-                  const char *docs[][3]);
-  void SetSections(std::map<std::string,cmDocumentationSection *>
-                   &sections);
+      Usage, Description, Options */
+  void SetSection(const char* sectionName, cmDocumentationSection section);
+  void SetSection(const char* sectionName,
+                  std::vector<cmDocumentationEntry>& docs);
+  void SetSection(const char* sectionName, const char* docs[][2]);
+  void SetSections(std::map<std::string, cmDocumentationSection> sections);
 
   /** Add the documentation to the beginning/end of the section */
-  void PrependSection(const char *sectionName,
-                      const char *docs[][3]);
-  void PrependSection(const char *sectionName,
-                      std::vector<cmDocumentationEntry> &docs);
-  void PrependSection(const char *sectionName,
-                      cmDocumentationEntry &docs);
-  void AppendSection(const char *sectionName,
-                     const char *docs[][3]);
-  void AppendSection(const char *sectionName,
-                     std::vector<cmDocumentationEntry> &docs);
-  void AppendSection(const char *sectionName,
-                     cmDocumentationEntry &docs);
+  void PrependSection(const char* sectionName, const char* docs[][2]);
+  void PrependSection(const char* sectionName,
+                      std::vector<cmDocumentationEntry>& docs);
+  void PrependSection(const char* sectionName, cmDocumentationEntry& docs);
+  void AppendSection(const char* sectionName, const char* docs[][2]);
+  void AppendSection(const char* sectionName,
+                     std::vector<cmDocumentationEntry>& docs);
+  void AppendSection(const char* sectionName, cmDocumentationEntry& docs);
 
-  /**
-   * Print documentation in the given form.  All previously added
-   * sections will be generated.
-   */
-  void Print(Form f, std::ostream& os);
-  
-  /**
-   * Print documentation in the current form.  All previously added
-   * sections will be generated.
-   */
-  void Print(std::ostream& os);
+  /** Add common (to all tools) documentation section(s) */
+  void addCommonStandardDocSections();
 
-  /**
-   * Add a section of documentation. This can be used to generate custom help
-   * documents.
-   */
-  void AddSectionToPrint(const char *section);
+  /** Add the CMake standard documentation section(s) */
+  void addCMakeStandardDocSections();
 
-  void SetSeeAlsoList(const char *data[][3]);
+  /** Add the CTest standard documentation section(s) */
+  void addCTestStandardDocSections();
 
-  /** Clear all previously added sections of help.  */
-  void ClearSections();  
-  
-  /** Set cmake root so we can find installed files */
-  void SetCMakeRoot(const char* root)  { this->CMakeRoot = root;}
-
-  /** Set CMAKE_MODULE_PATH so we can find additional cmake modules */
-  void SetCMakeModulePath(const char* path)  { this->CMakeModulePath = path;}
-  
-  static Form GetFormFromFilename(const std::string& filename);
+  /** Add the CPack standard documentation section(s) */
+  void addCPackStandardDocSections();
 
 private:
-  void SetForm(Form f);
+  void GlobHelp(std::vector<std::string>& files, std::string const& pattern);
+  void PrintNames(std::ostream& os, std::string const& pattern);
+  bool PrintFiles(std::ostream& os, std::string const& pattern);
 
-  bool CreateSingleModule(const char* fname, 
-                          const char* moduleName,
-                          cmDocumentationSection &sec);
-  void CreateModuleDocsForDir(cmsys::Directory& dir, 
-                              cmDocumentationSection &moduleSection);
-  bool CreateModulesSection();
-  bool CreateCustomModulesSection();
-  void CreateFullDocumentation();
-
-  bool PrintCopyright(std::ostream& os);
   bool PrintVersion(std::ostream& os);
-  bool PrintDocumentationGeneric(std::ostream& os, const char *section);
-  bool PrintDocumentationList(std::ostream& os, const char *section);
-  bool PrintDocumentationSingle(std::ostream& os);
-  bool PrintDocumentationSingleModule(std::ostream& os);
-  bool PrintDocumentationSingleProperty(std::ostream& os);
-  bool PrintDocumentationSingleVariable(std::ostream& os);
-  bool PrintDocumentationUsage(std::ostream& os);
-  bool PrintDocumentationFull(std::ostream& os);
-  bool PrintDocumentationModules(std::ostream& os);
-  bool PrintDocumentationCustomModules(std::ostream& os);
-  bool PrintDocumentationProperties(std::ostream& os);
-  bool PrintDocumentationVariables(std::ostream& os);
-  bool PrintDocumentationCurrentCommands(std::ostream& os);
-  bool PrintDocumentationCompatCommands(std::ostream& os);
-  void PrintDocumentationCommand(std::ostream& os,
-                                 const cmDocumentationEntry &entry);
-
+  bool PrintUsage(std::ostream& os);
+  bool PrintHelp(std::ostream& os);
+  bool PrintHelpFull(std::ostream& os);
+  bool PrintHelpOneManual(std::ostream& os);
+  bool PrintHelpOneCommand(std::ostream& os);
+  bool PrintHelpOneModule(std::ostream& os);
+  bool PrintHelpOnePolicy(std::ostream& os);
+  bool PrintHelpOneProperty(std::ostream& os);
+  bool PrintHelpOneVariable(std::ostream& os);
+  bool PrintHelpListManuals(std::ostream& os);
+  bool PrintHelpListCommands(std::ostream& os);
+  bool PrintHelpListModules(std::ostream& os);
+  bool PrintHelpListProperties(std::ostream& os);
+  bool PrintHelpListVariables(std::ostream& os);
+  bool PrintHelpListPolicies(std::ostream& os);
+  bool PrintHelpListGenerators(std::ostream& os);
+  bool PrintOldCustomModules(std::ostream& os);
 
   const char* GetNameString() const;
   bool IsOption(const char* arg) const;
 
+  bool ShowGenerators;
+
   std::string NameString;
-  std::map<std::string,cmDocumentationSection*> AllSections;
-  
-  std::string SeeAlsoString;
-  std::string CMakeRoot;
-  std::string CMakeModulePath;
-  std::set<std::string> ModulesFound;
-  std::vector< char* > ModuleStrings;
-  std::vector<const cmDocumentationSection *> PrintSections;
+  std::map<std::string, cmDocumentationSection> AllSections;
+  cmDocumentationSection& SectionAtName(const char* name);
+
   std::string CurrentArgument;
 
   struct RequestedHelpItem
   {
-    RequestedHelpItem():HelpForm(TextForm), HelpType(None) {}
-    cmDocumentationEnums::Form HelpForm;
-    cmDocumentationEnums::Type HelpType;
+    cmDocumentationEnums::Type HelpType = None;
     std::string Filename;
     std::string Argument;
   };
 
   std::vector<RequestedHelpItem> RequestedHelpItems;
-  cmDocumentationFormatter* CurrentFormatter;
-  cmDocumentationFormatterHTML HTMLFormatter;
-  cmDocumentationFormatterMan ManFormatter;
-  cmDocumentationFormatterText TextFormatter;
-  cmDocumentationFormatterUsage UsageFormatter;
+  cmDocumentationFormatter Formatter;
 
-  std::vector<std::string> PropertySections;
-  std::vector<std::string> VariableSections;
+  static void WarnFormFromFilename(RequestedHelpItem& request, bool& result);
 };
 
 #endif

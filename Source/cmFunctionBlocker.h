@@ -1,54 +1,45 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmFunctionBlocker_h
 #define cmFunctionBlocker_h
 
-#include "cmStandardIncludes.h"
+#include "cmListFileCache.h"
+
+class cmExecutionStatus;
 class cmMakefile;
 
-/** \class cmFunctionBlocker
- * \brief A class that defines an interface for blocking cmake functions
- *
- * This is the superclass for any classes that need to block a cmake function
- */
 class cmFunctionBlocker
 {
 public:
   /**
    * should a function be blocked
    */
-  virtual bool IsFunctionBlocked(const cmListFileFunction& lff,
-                                 cmMakefile&mf) = 0;
+  virtual bool IsFunctionBlocked(const cmListFileFunction& lff, cmMakefile& mf,
+                                 cmExecutionStatus& status) = 0;
 
   /**
    * should this function blocker be removed, useful when one function adds a
-   * blocker and another must remove it 
+   * blocker and another must remove it
    */
-  virtual bool ShouldRemove(const cmListFileFunction&,
-                            cmMakefile&) {return false;}
+  virtual bool ShouldRemove(const cmListFileFunction&, cmMakefile&)
+  {
+    return false;
+  }
 
-  /**
-   * When the end of a CMakeList file is reached this method is called.  It
-   * is not called on the end of an INCLUDE cmake file, just at the end of a
-   * regular CMakeList file 
-   */
-  virtual void ScopeEnded(cmMakefile&) {}
+  virtual ~cmFunctionBlocker() = default;
 
-  virtual ~cmFunctionBlocker() {}
+  /** Set/Get the context in which this blocker is created.  */
+  void SetStartingContext(cmListFileContext const& lfc)
+  {
+    this->StartingContext = lfc;
+  }
+  cmListFileContext const& GetStartingContext() const
+  {
+    return this->StartingContext;
+  }
+
+private:
+  cmListFileContext StartingContext;
 };
 
 #endif

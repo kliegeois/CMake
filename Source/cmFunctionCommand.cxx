@@ -1,89 +1,55 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmFunctionCommand.h"
 
-#include "cmake.h"
+#include <sstream>
+
+#include "cmAlgorithms.h"
+#include "cmExecutionStatus.h"
+#include "cmMakefile.h"
+#include "cmPolicies.h"
+#include "cmRange.h"
+#include "cmState.h"
 
 // define the class for function commands
 class cmFunctionHelperCommand : public cmCommand
 {
 public:
-  cmFunctionHelperCommand() {}
-
-  ///! clean up any memory allocated by the function
-  ~cmFunctionHelperCommand() {};
-
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone()
+  cmCommand* Clone() override
   {
-    cmFunctionHelperCommand *newC = new cmFunctionHelperCommand;
+    cmFunctionHelperCommand* newC = new cmFunctionHelperCommand;
     // we must copy when we clone
     newC->Args = this->Args;
     newC->Functions = this->Functions;
+    newC->Policies = this->Policies;
+    newC->FilePath = this->FilePath;
     return newC;
   }
-
-  /**
-   * This determines if the command is invoked when in script mode.
-   */
-  virtual bool IsScriptable() { return true; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InvokeInitialPass(const std::vector<cmListFileArgument>& args);
+  bool InvokeInitialPass(const std::vector<cmListFileArgument>& args,
+                         cmExecutionStatus&) override;
 
-  virtual bool InitialPass(std::vector<std::string> const&) { return false; };
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return this->Args[0].c_str(); }
-  
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation()
+  bool InitialPass(std::vector<std::string> const&,
+                   cmExecutionStatus&) override
   {
-    std::string docs = "Function named: ";
-    docs += this->GetName();
-    return docs.c_str();
+    return false;
   }
-
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-  {
-    return this->GetTerseDocumentation();
-  }
-
-  cmTypeMacro(cmFunctionHelperCommand, cmCommand);
 
   std::vector<std::string> Args;
   std::vector<cmListFileFunction> Functions;
+  cmPolicies::PolicyMap Policies;
+  std::string FilePath;
 };
 
-
-bool cmFunctionHelperCommand::InvokeInitialPass
-(const std::vector<cmListFileArgument>& args)
+bool cmFunctionHelperCommand::InvokeInitialPass(
+  const std::vector<cmListFileArgument>& args, cmExecutionStatus& inStatus)
 {
   // Expand the argument list to the function.
   std::vector<std::string> expandedArgs;
@@ -91,143 +57,91 @@ bool cmFunctionHelperCommand::InvokeInitialPass
 
   // make sure the number of arguments passed is at least the number
   // required by the signature
-  if (expandedArgs.size() < this->Args.size() - 1)
-    {
+  if (expandedArgs.size() < this->Args.size() - 1) {
     std::string errorMsg =
       "Function invoked with incorrect arguments for function named: ";
     errorMsg += this->Args[0];
-    this->SetError(errorMsg.c_str());
+    this->SetError(errorMsg);
     return false;
-    }
+  }
 
-  // we push a scope on the makefile
-  this->Makefile->PushScope();
+  cmMakefile::FunctionPushPop functionScope(this->Makefile, this->FilePath,
+                                            this->Policies);
 
   // set the value of argc
-  cmOStringStream strStream;
+  std::ostringstream strStream;
   strStream << expandedArgs.size();
-  this->Makefile->AddDefinition("ARGC",strStream.str().c_str());
+  this->Makefile->AddDefinition("ARGC", strStream.str().c_str());
+  this->Makefile->MarkVariableAsUsed("ARGC");
 
   // set the values for ARGV0 ARGV1 ...
-  for (unsigned int t = 0; t < expandedArgs.size(); ++t)
-    {
-    cmOStringStream tmpStream;
+  for (unsigned int t = 0; t < expandedArgs.size(); ++t) {
+    std::ostringstream tmpStream;
     tmpStream << "ARGV" << t;
-    this->Makefile->AddDefinition(tmpStream.str().c_str(), 
-                                  expandedArgs[t].c_str());
-    }
-  
+    this->Makefile->AddDefinition(tmpStream.str(), expandedArgs[t].c_str());
+    this->Makefile->MarkVariableAsUsed(tmpStream.str());
+  }
+
   // define the formal arguments
-  for (unsigned int j = 1; j < this->Args.size(); ++j)
-    {
-    this->Makefile->AddDefinition(this->Args[j].c_str(), 
-                                  expandedArgs[j-1].c_str());
-    }
+  for (unsigned int j = 1; j < this->Args.size(); ++j) {
+    this->Makefile->AddDefinition(this->Args[j], expandedArgs[j - 1].c_str());
+  }
 
   // define ARGV and ARGN
-  std::vector<std::string>::const_iterator eit;
-  std::string argvDef;
-  std::string argnDef;
-  unsigned int cnt = 0;
-  for ( eit = expandedArgs.begin(); eit != expandedArgs.end(); ++eit )
-    {
-    if ( argvDef.size() > 0 )
-      {
-      argvDef += ";";
-      }
-    argvDef += *eit;
-    if ( cnt >= this->Args.size()-1 )
-      {
-      if ( argnDef.size() > 0 )
-        {
-        argnDef += ";";
-        }
-      argnDef += *eit;
-      }
-    cnt ++;
-    }
+  std::string argvDef = cmJoin(expandedArgs, ";");
+  std::vector<std::string>::const_iterator eit =
+    expandedArgs.begin() + (this->Args.size() - 1);
+  std::string argnDef = cmJoin(cmMakeRange(eit, expandedArgs.end()), ";");
   this->Makefile->AddDefinition("ARGV", argvDef.c_str());
+  this->Makefile->MarkVariableAsUsed("ARGV");
   this->Makefile->AddDefinition("ARGN", argnDef.c_str());
+  this->Makefile->MarkVariableAsUsed("ARGN");
 
   // Invoke all the functions that were collected in the block.
   // for each function
-  for(unsigned int c = 0; c < this->Functions.size(); ++c)
-    {
-    if (!this->Makefile->ExecuteCommand(this->Functions[c]))
-      {
-      cmOStringStream error;
-      error << "Error in cmake code at\n"
-            << this->Functions[c].FilePath << ":" 
-            << this->Functions[c].Line << ":\n"
-            << "A command failed during the invocation of function \""
-            << this->Args[0].c_str() << "\".";
-      cmSystemTools::Error(error.str().c_str());
-
-      // pop scope on the makefile and return
-      this->Makefile->PopScope();
+  for (cmListFileFunction const& func : this->Functions) {
+    cmExecutionStatus status;
+    if (!this->Makefile->ExecuteCommand(func, status) ||
+        status.GetNestedError()) {
+      // The error message should have already included the call stack
+      // so we do not need to report an error here.
+      functionScope.Quiet();
+      inStatus.SetNestedError();
       return false;
-      }
     }
+    if (status.GetReturnInvoked()) {
+      return true;
+    }
+  }
 
   // pop scope on the makefile
-  this->Makefile->PopScope();
   return true;
 }
 
-bool cmFunctionFunctionBlocker::
-IsFunctionBlocked(const cmListFileFunction& lff, cmMakefile &mf)
+bool cmFunctionFunctionBlocker::IsFunctionBlocked(
+  const cmListFileFunction& lff, cmMakefile& mf, cmExecutionStatus&)
 {
   // record commands until we hit the ENDFUNCTION
   // at the ENDFUNCTION call we shift gears and start looking for invocations
-  if(!cmSystemTools::Strucmp(lff.Name.c_str(),"function"))
-    {
+  if (lff.Name.Lower == "function") {
     this->Depth++;
-    }
-  else if(!cmSystemTools::Strucmp(lff.Name.c_str(),"endfunction"))
-    {
+  } else if (lff.Name.Lower == "endfunction") {
     // if this is the endfunction for this function then execute
-    if (!this->Depth) 
-      {
-      std::string name = this->Args[0];
-      std::vector<std::string>::size_type cc;
-      name += "(";
-      for ( cc = 0; cc < this->Args.size(); cc ++ )
-        {
-        name += " " + this->Args[cc];
-        }
-      name += " )";
-
+    if (!this->Depth) {
       // create a new command and add it to cmake
-      cmFunctionHelperCommand *f = new cmFunctionHelperCommand();
+      cmFunctionHelperCommand* f = new cmFunctionHelperCommand();
       f->Args = this->Args;
       f->Functions = this->Functions;
-      
-      // Set the FilePath on the arguments to match the function since it is
-      // not stored and the original values may be freed
-      for (unsigned int i = 0; i < f->Functions.size(); ++i)
-        {
-        for (unsigned int j = 0; j < f->Functions[i].Arguments.size(); ++j)
-          {
-          f->Functions[i].Arguments[j].FilePath = 
-            f->Functions[i].FilePath.c_str();
-          }
-        }
-
-      std::string newName = "_" + this->Args[0];
-      mf.GetCMakeInstance()->RenameCommand(this->Args[0].c_str(), 
-                                           newName.c_str());
-      mf.AddCommand(f);
-
+      f->FilePath = this->GetStartingContext().FilePath;
+      mf.RecordPolicies(f->Policies);
+      mf.GetState()->AddScriptedCommand(this->Args[0], f);
       // remove the function blocker now that the function is defined
-      mf.RemoveFunctionBlocker(lff);
+      mf.RemoveFunctionBlocker(this, lff);
       return true;
-      }
-    else
-      {
-      // decrement for each nested function that ends
-      this->Depth--;
-      }
     }
+    // decrement for each nested function that ends
+    this->Depth--;
+  }
 
   // if it wasn't an endfunction and we are not executing then we must be
   // recording
@@ -235,53 +149,35 @@ IsFunctionBlocked(const cmListFileFunction& lff, cmMakefile &mf)
   return true;
 }
 
-
-bool cmFunctionFunctionBlocker::
-ShouldRemove(const cmListFileFunction& lff, cmMakefile &mf)
+bool cmFunctionFunctionBlocker::ShouldRemove(const cmListFileFunction& lff,
+                                             cmMakefile& mf)
 {
-  if(!cmSystemTools::Strucmp(lff.Name.c_str(),"endfunction"))
-    {
+  if (lff.Name.Lower == "endfunction") {
     std::vector<std::string> expandedArguments;
-    mf.ExpandArguments(lff.Arguments, expandedArguments);
-    if ((!expandedArguments.empty() && 
-        (expandedArguments[0] == this->Args[0]))
-        || cmSystemTools::IsOn
-        (mf.GetPropertyOrDefinition("CMAKE_ALLOW_LOOSE_LOOP_CONSTRUCTS")))
-      {
+    mf.ExpandArguments(lff.Arguments, expandedArguments,
+                       this->GetStartingContext().FilePath.c_str());
+    // if the endfunction has arguments then make sure
+    // they match the ones in the opening function command
+    if ((expandedArguments.empty() ||
+         (expandedArguments[0] == this->Args[0]))) {
       return true;
-      }
     }
+  }
 
   return false;
 }
 
-void cmFunctionFunctionBlocker::
-ScopeEnded(cmMakefile &mf)
+bool cmFunctionCommand::InitialPass(std::vector<std::string> const& args,
+                                    cmExecutionStatus&)
 {
-  // functions should end with an EndFunction
-  cmSystemTools::Error(
-    "The end of a CMakeLists file was reached with a FUNCTION statement that "
-    "was not closed properly. Within the directory: ",
-    mf.GetCurrentDirectory(), " with function ",
-    this->Args[0].c_str());
-}
-
-bool cmFunctionCommand::InitialPass(std::vector<std::string> const& args)
-{
-  if(args.size() < 1)
-    {
+  if (args.empty()) {
     this->SetError("called with incorrect number of arguments");
     return false;
-    }
+  }
 
   // create a function blocker
-  cmFunctionFunctionBlocker *f = new cmFunctionFunctionBlocker();
-  for(std::vector<std::string>::const_iterator j = args.begin();
-      j != args.end(); ++j)
-    {   
-    f->Args.push_back(*j);
-    }
+  cmFunctionFunctionBlocker* f = new cmFunctionFunctionBlocker();
+  f->Args.insert(f->Args.end(), args.begin(), args.end());
   this->Makefile->AddFunctionBlocker(f);
   return true;
 }
-

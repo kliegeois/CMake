@@ -1,193 +1,157 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmDependsFortran.h"
 
-#include "cmSystemTools.h"
+#include "cmsys/FStream.hxx"
+#include <assert.h>
+#include <iostream>
+#include <map>
+#include <stdlib.h>
+#include <utility>
+
+#include "cmAlgorithms.h"
+#include "cmFortranParser.h" /* Interface to parser object.  */
+#include "cmGeneratedFileStream.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
-#include "cmGeneratedFileStream.h"
-
-#include "cmDependsFortranParser.h" /* Interface to parser object.  */
-
-#include <assert.h>
-#include <stack>
+#include "cmOutputConverter.h"
+#include "cmStateDirectory.h"
+#include "cmStateSnapshot.h"
+#include "cmSystemTools.h"
 
 // TODO: Test compiler for the case of the mod file.  Some always
 // use lower case and some always use upper case.  I do not know if any
 // use the case from the source code.
 
-//----------------------------------------------------------------------------
-// Information about a single source file.
-class cmDependsFortranSourceInfo
+static void cmFortranModuleAppendUpperLower(std::string const& mod,
+                                            std::string& mod_upper,
+                                            std::string& mod_lower)
 {
-public:
-  // The name of the soruce file.
-  std::string Source;
+  std::string::size_type ext_len = 0;
+  if (cmHasLiteralSuffix(mod, ".mod")) {
+    ext_len = 4;
+  } else if (cmHasLiteralSuffix(mod, ".smod")) {
+    ext_len = 5;
+  }
+  std::string const& name = mod.substr(0, mod.size() - ext_len);
+  std::string const& ext = mod.substr(mod.size() - ext_len);
+  mod_upper += cmSystemTools::UpperCase(name) + ext;
+  mod_lower += mod;
+}
 
-  // Set of provided and required modules.
-  std::set<cmStdString> Provides;
-  std::set<cmStdString> Requires;
-
-  // Set of files included in the translation unit.
-  std::set<cmStdString> Includes;
-};
-
-//----------------------------------------------------------------------------
-// Parser methods not included in generated interface.
-
-// Get the current buffer processed by the lexer.
-YY_BUFFER_STATE cmDependsFortranLexer_GetCurrentBuffer(yyscan_t yyscanner);
-
-// The parser entry point.
-int cmDependsFortran_yyparse(yyscan_t);
-
-//----------------------------------------------------------------------------
-// Define parser object internal structure.
-struct cmDependsFortranFile
-{
-  cmDependsFortranFile(FILE* file, YY_BUFFER_STATE buffer,
-                       const std::string& dir):
-    File(file), Buffer(buffer), Directory(dir) {}
-  FILE* File;
-  YY_BUFFER_STATE Buffer;
-  std::string Directory;
-};
-
-struct cmDependsFortranParser_s
-{
-  cmDependsFortranParser_s(cmDependsFortran* self,
-                           cmDependsFortranSourceInfo& info);
-  ~cmDependsFortranParser_s();
-
-  // Pointer back to the main class.
-  cmDependsFortran* Self;
-
-  // Lexical scanner instance.
-  yyscan_t Scanner;
-
-  // Stack of open files in the translation unit.
-  std::stack<cmDependsFortranFile> FileStack;
-
-  // Buffer for string literals.
-  std::string TokenString;
-
-  // Flag for whether lexer is reading from inside an interface.
-  bool InInterface;
-
-  int OldStartcond;
-  bool InPPFalseBranch;
-  std::vector<bool> SkipToEnd;
-  int StepI;
-
-  // Information about the parsed source.
-  cmDependsFortranSourceInfo& Info;
-};
-
-//----------------------------------------------------------------------------
 class cmDependsFortranInternals
 {
 public:
   // The set of modules provided by this target.
-  std::set<cmStdString> TargetProvides;
+  std::set<std::string> TargetProvides;
 
   // Map modules required by this target to locations.
-  typedef std::map<cmStdString, cmStdString> TargetRequiresMap;
+  typedef std::map<std::string, std::string> TargetRequiresMap;
   TargetRequiresMap TargetRequires;
 
   // Information about each object file.
-  typedef std::map<cmStdString, cmDependsFortranSourceInfo> ObjectInfoMap;
+  typedef std::map<std::string, cmFortranSourceInfo> ObjectInfoMap;
   ObjectInfoMap ObjectInfo;
 
-  cmDependsFortranSourceInfo& CreateObjectInfo(const char* obj,
-                                               const char* src)
-    {
-    std::map<cmStdString, cmDependsFortranSourceInfo>::iterator i =
+  cmFortranSourceInfo& CreateObjectInfo(const std::string& obj,
+                                        const std::string& src)
+  {
+    std::map<std::string, cmFortranSourceInfo>::iterator i =
       this->ObjectInfo.find(obj);
-    if(i == this->ObjectInfo.end())
-      {
-      std::map<cmStdString, cmDependsFortranSourceInfo>::value_type
-        entry(obj, cmDependsFortranSourceInfo());
+    if (i == this->ObjectInfo.end()) {
+      std::map<std::string, cmFortranSourceInfo>::value_type entry(
+        obj, cmFortranSourceInfo());
       i = this->ObjectInfo.insert(entry).first;
       i->second.Source = src;
-      }
-    return i->second;
     }
+    return i->second;
+  }
 };
 
-//----------------------------------------------------------------------------
-cmDependsFortran::cmDependsFortran():
-  IncludePath(0), Internal(0)
+cmDependsFortran::cmDependsFortran() = default;
+
+cmDependsFortran::cmDependsFortran(cmLocalGenerator* lg)
+  : cmDepends(lg)
+  , Internal(new cmDependsFortranInternals)
 {
+  // Configure the include file search path.
+  this->SetIncludePathFromLanguage("Fortran");
+
+  // Get the list of definitions.
+  std::vector<std::string> definitions;
+  cmMakefile* mf = this->LocalGenerator->GetMakefile();
+  if (const char* c_defines =
+        mf->GetDefinition("CMAKE_TARGET_DEFINITIONS_Fortran")) {
+    cmSystemTools::ExpandListArgument(c_defines, definitions);
+  }
+
+  // translate i.e. FOO=BAR to FOO and add it to the list of defined
+  // preprocessor symbols
+  for (std::string def : definitions) {
+    std::string::size_type assignment = def.find('=');
+    if (assignment != std::string::npos) {
+      def = def.substr(0, assignment);
+    }
+    this->PPDefinitions.insert(def);
+  }
+
+  this->CompilerId = mf->GetSafeDefinition("CMAKE_Fortran_COMPILER_ID");
+  this->SModSep = mf->GetSafeDefinition("CMAKE_Fortran_SUBMODULE_SEP");
+  this->SModExt = mf->GetSafeDefinition("CMAKE_Fortran_SUBMODULE_EXT");
 }
 
-//----------------------------------------------------------------------------
-cmDependsFortran::cmDependsFortran(std::vector<std::string> const& includes):
-  IncludePath(&includes), Internal(new cmDependsFortranInternals)
-{
-}
-
-//----------------------------------------------------------------------------
 cmDependsFortran::~cmDependsFortran()
 {
   delete this->Internal;
 }
 
-//----------------------------------------------------------------------------
-bool cmDependsFortran::WriteDependencies(const char *src, const char *obj,
-                                         std::ostream&, std::ostream&)
+bool cmDependsFortran::WriteDependencies(const std::set<std::string>& sources,
+                                         const std::string& obj,
+                                         std::ostream& /*makeDepends*/,
+                                         std::ostream& /*internalDepends*/)
 {
   // Make sure this is a scanning instance.
-  if(!src || src[0] == '\0')
-    {
-    cmSystemTools::Error("Cannot scan dependencies without an source file.");
+  if (sources.empty() || sources.begin()->empty()) {
+    cmSystemTools::Error("Cannot scan dependencies without a source file.");
     return false;
-    }
-  if(!obj || obj[0] == '\0')
-    {
+  }
+  if (obj.empty()) {
     cmSystemTools::Error("Cannot scan dependencies without an object file.");
     return false;
+  }
+
+  cmFortranCompiler fc;
+  fc.Id = this->CompilerId;
+  fc.SModSep = this->SModSep;
+  fc.SModExt = this->SModExt;
+
+  bool okay = true;
+  for (std::string const& src : sources) {
+    // Get the information object for this source.
+    cmFortranSourceInfo& info = this->Internal->CreateObjectInfo(obj, src);
+
+    // Create the parser object. The constructor takes info by reference,
+    // so we may look into the resulting objects later.
+    cmFortranParser parser(fc, this->IncludePath, this->PPDefinitions, info);
+
+    // Push on the starting file.
+    cmFortranParser_FilePush(&parser, src.c_str());
+
+    // Parse the translation unit.
+    if (cmFortran_yyparse(parser.Scanner) != 0) {
+      // Failed to parse the file.  Report failure to write dependencies.
+      okay = false;
+      /* clang-format off */
+      std::cerr <<
+        "warning: failed to parse dependencies from Fortran source "
+        "'" << src << "': " << parser.Error << std::endl
+        ;
+      /* clang-format on */
     }
-  if(!this->IncludePath)
-    {
-    cmSystemTools::Error("Cannot scan dependencies without an include path.");
-    return false;
-    }
-
-  // Get the information object for this source.
-  cmDependsFortranSourceInfo& info =
-    this->Internal->CreateObjectInfo(obj, src);
-
-  // Create the parser object.
-  cmDependsFortranParser parser(this, info);
-
-  // Push on the starting file.
-  cmDependsFortranParser_FilePush(&parser, src);
-
-  // Parse the translation unit.
-  if(cmDependsFortran_yyparse(parser.Scanner) != 0)
-    {
-    // Failed to parse the file.  Report failure to write dependencies.
-    return false;
-    }
-
-  return true;
+  }
+  return okay;
 }
 
-//----------------------------------------------------------------------------
 bool cmDependsFortran::Finalize(std::ostream& makeDepends,
                                 std::ostream& internalDepends)
 {
@@ -195,121 +159,92 @@ bool cmDependsFortran::Finalize(std::ostream& makeDepends,
   this->LocateModules();
 
   // Get the directory in which stamp files will be stored.
-  const char* stamp_dir =
-    this->LocalGenerator->GetMakefile()->GetCurrentOutputDirectory();
+  const std::string& stamp_dir = this->TargetDirectory;
 
   // Get the directory in which module files will be created.
-  const char* mod_dir;
   cmMakefile* mf = this->LocalGenerator->GetMakefile();
-  if(const char* target_mod_dir =
-     mf->GetDefinition("CMAKE_Fortran_TARGET_MODULE_DIR"))
-    {
-    mod_dir = target_mod_dir;
-    }
-  else
-    {
-    mod_dir = stamp_dir;
-    }
+  std::string mod_dir =
+    mf->GetSafeDefinition("CMAKE_Fortran_TARGET_MODULE_DIR");
+  if (mod_dir.empty()) {
+    mod_dir = this->LocalGenerator->GetCurrentBinaryDirectory();
+  }
 
   // Actually write dependencies to the streams.
   typedef cmDependsFortranInternals::ObjectInfoMap ObjectInfoMap;
   ObjectInfoMap const& objInfo = this->Internal->ObjectInfo;
-  for(ObjectInfoMap::const_iterator i = objInfo.begin();
-      i != objInfo.end(); ++i)
-    {
-    if(!this->WriteDependenciesReal(i->first.c_str(), i->second,
-                                    mod_dir, stamp_dir,
-                                    makeDepends, internalDepends))
-      {
+  for (auto const& i : objInfo) {
+    if (!this->WriteDependenciesReal(i.first, i.second, mod_dir, stamp_dir,
+                                     makeDepends, internalDepends)) {
       return false;
-      }
     }
+  }
 
   // Store the list of modules provided by this target.
   std::string fiName = this->TargetDirectory;
   fiName += "/fortran.internal";
-  cmGeneratedFileStream fiStream(fiName.c_str());
+  cmGeneratedFileStream fiStream(fiName);
   fiStream << "# The fortran modules provided by this target.\n";
   fiStream << "provides\n";
-  std::set<cmStdString> const& provides = this->Internal->TargetProvides;
-  for(std::set<cmStdString>::const_iterator i = provides.begin();
-      i != provides.end(); ++i)
-    {
-    fiStream << " " << *i << "\n";
-    }
+  std::set<std::string> const& provides = this->Internal->TargetProvides;
+  for (std::string const& i : provides) {
+    fiStream << " " << i << "\n";
+  }
 
   // Create a script to clean the modules.
-  if(!provides.empty())
-    {
+  if (!provides.empty()) {
     std::string fcName = this->TargetDirectory;
     fcName += "/cmake_clean_Fortran.cmake";
-    cmGeneratedFileStream fcStream(fcName.c_str());
+    cmGeneratedFileStream fcStream(fcName);
     fcStream << "# Remove fortran modules provided by this target.\n";
     fcStream << "FILE(REMOVE";
-    for(std::set<cmStdString>::const_iterator i = provides.begin();
-        i != provides.end(); ++i)
-      {
+    std::string currentBinDir =
+      this->LocalGenerator->GetCurrentBinaryDirectory();
+    for (std::string const& i : provides) {
       std::string mod_upper = mod_dir;
       mod_upper += "/";
-      mod_upper += cmSystemTools::UpperCase(*i);
-      mod_upper += ".mod";
       std::string mod_lower = mod_dir;
       mod_lower += "/";
-      mod_lower += *i;
-      mod_lower += ".mod";
+      cmFortranModuleAppendUpperLower(i, mod_upper, mod_lower);
       std::string stamp = stamp_dir;
       stamp += "/";
-      stamp += *i;
-      stamp += ".mod.stamp";
+      stamp += i;
+      stamp += ".stamp";
       fcStream << "\n";
-      fcStream << "  \"" <<
-        this->LocalGenerator->Convert(mod_lower.c_str(),
-                                      cmLocalGenerator::START_OUTPUT)
+      fcStream << "  \""
+               << this->MaybeConvertToRelativePath(currentBinDir, mod_lower)
                << "\"\n";
-      fcStream << "  \"" <<
-        this->LocalGenerator->Convert(mod_upper.c_str(),
-                                      cmLocalGenerator::START_OUTPUT)
+      fcStream << "  \""
+               << this->MaybeConvertToRelativePath(currentBinDir, mod_upper)
                << "\"\n";
-      fcStream << "  \"" <<
-        this->LocalGenerator->Convert(stamp.c_str(),
-                                      cmLocalGenerator::START_OUTPUT)
+      fcStream << "  \""
+               << this->MaybeConvertToRelativePath(currentBinDir, stamp)
                << "\"\n";
-      }
-    fcStream << "  )\n";
     }
+    fcStream << "  )\n";
+  }
   return true;
 }
 
-//----------------------------------------------------------------------------
 void cmDependsFortran::LocateModules()
 {
   // Collect the set of modules provided and required by all sources.
   typedef cmDependsFortranInternals::ObjectInfoMap ObjectInfoMap;
   ObjectInfoMap const& objInfo = this->Internal->ObjectInfo;
-  for(ObjectInfoMap::const_iterator infoI = objInfo.begin();
-      infoI != objInfo.end(); ++infoI)
-    {
-    cmDependsFortranSourceInfo const& info = infoI->second;
-    for(std::set<cmStdString>::const_iterator i = info.Provides.begin();
-        i != info.Provides.end(); ++i)
-      {
-      // Include this module in the set provided by this target.
-      this->Internal->TargetProvides.insert(*i);
-      }
+  for (auto const& infoI : objInfo) {
+    cmFortranSourceInfo const& info = infoI.second;
+    // Include this module in the set provided by this target.
+    this->Internal->TargetProvides.insert(info.Provides.begin(),
+                                          info.Provides.end());
 
-    for(std::set<cmStdString>::const_iterator i = info.Requires.begin();
-        i != info.Requires.end(); ++i)
-      {
-      // Include this module in the set required by this target.
-      this->Internal->TargetRequires[*i] = "";
-      }
+    for (std::string const& r : info.Requires) {
+      this->Internal->TargetRequires[r].clear();
     }
+  }
 
   // Short-circuit for simple targets.
-  if(this->Internal->TargetRequires.empty())
-    {
+  if (this->Internal->TargetRequires.empty()) {
     return;
-    }
+  }
 
   // Match modules provided by this target to those it requires.
   this->MatchLocalModules();
@@ -317,291 +252,230 @@ void cmDependsFortran::LocateModules()
   // Load information about other targets.
   cmMakefile* mf = this->LocalGenerator->GetMakefile();
   std::vector<std::string> infoFiles;
-  if(const char* infoFilesValue =
-     mf->GetDefinition("CMAKE_TARGET_LINKED_INFO_FILES"))
-    {
+  if (const char* infoFilesValue =
+        mf->GetDefinition("CMAKE_TARGET_LINKED_INFO_FILES")) {
     cmSystemTools::ExpandListArgument(infoFilesValue, infoFiles);
-    }
-  for(std::vector<std::string>::const_iterator i = infoFiles.begin();
-      i != infoFiles.end(); ++i)
-    {
-    std::string targetDir = cmSystemTools::GetFilenamePath(*i);
+  }
+  for (std::string const& i : infoFiles) {
+    std::string targetDir = cmSystemTools::GetFilenamePath(i);
     std::string fname = targetDir + "/fortran.internal";
-    std::ifstream fin(fname.c_str());
-    if(fin)
-      {
-      std::string moduleDir =
-        cmSystemTools::GetFilenamePath(
-          cmSystemTools::GetFilenamePath(targetDir));
-      this->MatchRemoteModules(fin, moduleDir.c_str());
-      }
+    cmsys::ifstream fin(fname.c_str());
+    if (fin) {
+      this->MatchRemoteModules(fin, targetDir);
     }
+  }
 }
 
-//----------------------------------------------------------------------------
 void cmDependsFortran::MatchLocalModules()
 {
-  const char* stampDir =
-    this->LocalGenerator->GetMakefile()->GetCurrentOutputDirectory();
-  std::set<cmStdString> const& provides = this->Internal->TargetProvides;
-  for(std::set<cmStdString>::const_iterator i = provides.begin();
-      i != provides.end(); ++i)
-    {
-    this->ConsiderModule(i->c_str(), stampDir);
-    }
+  std::string const& stampDir = this->TargetDirectory;
+  std::set<std::string> const& provides = this->Internal->TargetProvides;
+  for (std::string const& i : provides) {
+    this->ConsiderModule(i, stampDir);
+  }
 }
 
-//----------------------------------------------------------------------------
 void cmDependsFortran::MatchRemoteModules(std::istream& fin,
-                                          const char* stampDir)
+                                          const std::string& stampDir)
 {
   std::string line;
   bool doing_provides = false;
-  while(cmSystemTools::GetLineFromStream(fin, line))
-    {
+  while (cmSystemTools::GetLineFromStream(fin, line)) {
     // Ignore comments and empty lines.
-    if(line.empty() || line[0] == '#' || line[0] == '\r')
-      {
+    if (line.empty() || line[0] == '#' || line[0] == '\r') {
       continue;
-      }
-
-    if(line[0] == ' ')
-      {
-      if(doing_provides)
-        {
-        this->ConsiderModule(line.c_str()+1, stampDir);
-        }
-      }
-    else if(line == "provides")
-      {
-      doing_provides = true;
-      }
-    else
-      {
-      doing_provides = false;
-      }
     }
+
+    if (line[0] == ' ') {
+      if (doing_provides) {
+        std::string mod = line;
+        if (!cmHasLiteralSuffix(mod, ".mod") &&
+            !cmHasLiteralSuffix(mod, ".smod")) {
+          // Support fortran.internal files left by older versions of CMake.
+          // They do not include the ".mod" extension.
+          mod += ".mod";
+        }
+        this->ConsiderModule(mod.substr(1), stampDir);
+      }
+    } else if (line == "provides") {
+      doing_provides = true;
+    } else {
+      doing_provides = false;
+    }
+  }
 }
 
-//----------------------------------------------------------------------------
-void cmDependsFortran::ConsiderModule(const char* name,
-                                      const char* stampDir)
+void cmDependsFortran::ConsiderModule(const std::string& name,
+                                      const std::string& stampDir)
 {
   // Locate each required module.
   typedef cmDependsFortranInternals::TargetRequiresMap TargetRequiresMap;
   TargetRequiresMap::iterator required =
     this->Internal->TargetRequires.find(name);
-  if(required != this->Internal->TargetRequires.end() &&
-     required->second.empty())
-    {
+  if (required != this->Internal->TargetRequires.end() &&
+      required->second.empty()) {
     // The module is provided by a CMake target.  It will have a stamp file.
     std::string stampFile = stampDir;
     stampFile += "/";
     stampFile += name;
-    stampFile += ".mod.stamp";
+    stampFile += ".stamp";
     required->second = stampFile;
-    }
+  }
 }
 
-//----------------------------------------------------------------------------
-bool
-cmDependsFortran
-::WriteDependenciesReal(const char *obj,
-                        cmDependsFortranSourceInfo const& info,
-                        const char* mod_dir, const char* stamp_dir,
-                        std::ostream& makeDepends,
-                        std::ostream& internalDepends)
+bool cmDependsFortran::WriteDependenciesReal(std::string const& obj,
+                                             cmFortranSourceInfo const& info,
+                                             std::string const& mod_dir,
+                                             std::string const& stamp_dir,
+                                             std::ostream& makeDepends,
+                                             std::ostream& internalDepends)
 {
   typedef cmDependsFortranInternals::TargetRequiresMap TargetRequiresMap;
 
   // Get the source file for this object.
-  const char* src = info.Source.c_str();
+  std::string const& src = info.Source;
 
   // Write the include dependencies to the output stream.
-  internalDepends << obj << std::endl;
+  std::string binDir = this->LocalGenerator->GetBinaryDirectory();
+  std::string obj_i = this->MaybeConvertToRelativePath(binDir, obj);
+  std::string obj_m = cmSystemTools::ConvertToOutputPath(obj_i);
+  internalDepends << obj_i << std::endl;
   internalDepends << " " << src << std::endl;
-  for(std::set<cmStdString>::const_iterator i = info.Includes.begin();
-      i != info.Includes.end(); ++i)
-    {
-    makeDepends << obj << ": "
-       << cmSystemTools::ConvertToOutputPath(i->c_str()).c_str()
-       << std::endl;
-    internalDepends << " " << i->c_str() << std::endl;
-    }
+  for (std::string const& i : info.Includes) {
+    makeDepends << obj_m << ": "
+                << cmSystemTools::ConvertToOutputPath(
+                     this->MaybeConvertToRelativePath(binDir, i))
+                << std::endl;
+    internalDepends << " " << i << std::endl;
+  }
   makeDepends << std::endl;
 
   // Write module requirements to the output stream.
-  for(std::set<cmStdString>::const_iterator i = info.Requires.begin();
-      i != info.Requires.end(); ++i)
-    {
+  for (std::string const& i : info.Requires) {
     // Require only modules not provided in the same source.
-    if(info.Provides.find(*i) != info.Provides.end())
-      {
+    if (info.Provides.find(i) != info.Provides.cend()) {
       continue;
-      }
-
-    // If the module is provided in this target special handling is
-    // needed.
-    if(this->Internal->TargetProvides.find(*i) !=
-       this->Internal->TargetProvides.end())
-      {
-      // The module is provided by a different source in the same
-      // target.  Add the proxy dependency to make sure the other
-      // source builds first.
-      std::string proxy = stamp_dir;
-      proxy += "/";
-      proxy += *i;
-      proxy += ".mod.proxy";
-      proxy = this->LocalGenerator->Convert(proxy.c_str(),
-                                            cmLocalGenerator::HOME_OUTPUT,
-                                            cmLocalGenerator::MAKEFILE);
-
-      // since we require some things add them to our list of requirements
-      makeDepends << obj << ".requires: " << proxy << std::endl;
-      }
+    }
 
     // The object file should depend on timestamped files for the
     // modules it uses.
     TargetRequiresMap::const_iterator required =
-      this->Internal->TargetRequires.find(*i);
-    if(required == this->Internal->TargetRequires.end()) { abort(); }
-    if(!required->second.empty())
-      {
+      this->Internal->TargetRequires.find(i);
+    if (required == this->Internal->TargetRequires.end()) {
+      abort();
+    }
+    if (!required->second.empty()) {
       // This module is known.  Depend on its timestamp file.
-      std::string stampFile =
-        this->LocalGenerator->Convert(required->second.c_str(),
-                                      cmLocalGenerator::HOME_OUTPUT,
-                                      cmLocalGenerator::SHELL);
-      makeDepends << obj << ": " << stampFile << "\n";
-      }
-    else
-      {
+      std::string stampFile = cmSystemTools::ConvertToOutputPath(
+        this->MaybeConvertToRelativePath(binDir, required->second));
+      makeDepends << obj_m << ": " << stampFile << "\n";
+    } else {
       // This module is not known to CMake.  Try to locate it where
       // the compiler will and depend on that.
       std::string module;
-      if(this->FindModule(*i, module))
-        {
-        module =
-          this->LocalGenerator->Convert(module.c_str(),
-                                        cmLocalGenerator::HOME_OUTPUT,
-                                        cmLocalGenerator::SHELL);
-        makeDepends << obj << ": " << module << "\n";
-        }
+      if (this->FindModule(i, module)) {
+        module = cmSystemTools::ConvertToOutputPath(
+          this->MaybeConvertToRelativePath(binDir, module));
+        makeDepends << obj_m << ": " << module << "\n";
       }
     }
-
-  // Write provided modules to the output stream.
-  for(std::set<cmStdString>::const_iterator i = info.Provides.begin();
-      i != info.Provides.end(); ++i)
-    {
-    std::string proxy = stamp_dir;
-    proxy += "/";
-    proxy += *i;
-    proxy += ".mod.proxy";
-    proxy = this->LocalGenerator->Convert(proxy.c_str(),
-                                          cmLocalGenerator::HOME_OUTPUT,
-                                          cmLocalGenerator::MAKEFILE);
-    makeDepends << proxy << ": " << obj << ".provides" << std::endl;
-    }
+  }
 
   // If any modules are provided then they must be converted to stamp files.
-  if(!info.Provides.empty())
-    {
+  if (!info.Provides.empty()) {
     // Create a target to copy the module after the object file
     // changes.
-    makeDepends << obj << ".provides.build:\n";
-    for(std::set<cmStdString>::const_iterator i = info.Provides.begin();
-        i != info.Provides.end(); ++i)
-      {
+    for (std::string const& i : info.Provides) {
       // Include this module in the set provided by this target.
-      this->Internal->TargetProvides.insert(*i);
+      this->Internal->TargetProvides.insert(i);
 
       // Always use lower case for the mod stamp file name.  The
       // cmake_copy_f90_mod will call back to this class, which will
       // try various cases for the real mod file name.
-      std::string m = cmSystemTools::LowerCase(*i);
       std::string modFile = mod_dir;
       modFile += "/";
-      modFile += *i;
-      modFile =
-        this->LocalGenerator->Convert(modFile.c_str(),
-                                      cmLocalGenerator::HOME_OUTPUT,
-                                      cmLocalGenerator::SHELL);
+      modFile += i;
+      modFile = this->LocalGenerator->ConvertToOutputFormat(
+        this->MaybeConvertToRelativePath(binDir, modFile),
+        cmOutputConverter::SHELL);
       std::string stampFile = stamp_dir;
       stampFile += "/";
-      stampFile += m;
-      stampFile += ".mod.stamp";
-      stampFile =
-        this->LocalGenerator->Convert(stampFile.c_str(),
-                                      cmLocalGenerator::HOME_OUTPUT,
-                                      cmLocalGenerator::SHELL);
-      makeDepends << "\t$(CMAKE_COMMAND) -E cmake_copy_f90_mod "
-                  << modFile << " " << stampFile;
+      stampFile += i;
+      stampFile += ".stamp";
+      stampFile = this->MaybeConvertToRelativePath(binDir, stampFile);
+      std::string const stampFileForShell =
+        this->LocalGenerator->ConvertToOutputFormat(stampFile,
+                                                    cmOutputConverter::SHELL);
+      std::string const stampFileForMake =
+        cmSystemTools::ConvertToOutputPath(stampFile);
+
+      makeDepends << obj_m << ".provides.build"
+                  << ": " << stampFileForMake << "\n";
+      // Note that when cmake_copy_f90_mod finds that a module file
+      // and the corresponding stamp file have no differences, the stamp
+      // file is not updated. In such case the stamp file will be always
+      // older than its prerequisite and trigger cmake_copy_f90_mod
+      // on each new build. This is expected behavior for incremental
+      // builds and can not be changed without preforming recursive make
+      // calls that would considerably slow down the building process.
+      makeDepends << stampFileForMake << ": " << obj_m << "\n";
+      makeDepends << "\t$(CMAKE_COMMAND) -E cmake_copy_f90_mod " << modFile
+                  << " " << stampFileForShell;
       cmMakefile* mf = this->LocalGenerator->GetMakefile();
       const char* cid = mf->GetDefinition("CMAKE_Fortran_COMPILER_ID");
-      if(cid && *cid)
-        {
+      if (cid && *cid) {
         makeDepends << " " << cid;
-        }
-      makeDepends << "\n";
       }
-    // After copying the modules update the timestamp file so that
-    // copying will not be done again until the source rebuilds.
-    makeDepends << "\t$(CMAKE_COMMAND) -E touch " << obj
+      makeDepends << "\n";
+    }
+    makeDepends << obj_m << ".provides.build:\n";
+    // After copying the modules update the timestamp file.
+    makeDepends << "\t$(CMAKE_COMMAND) -E touch " << obj_m
                 << ".provides.build\n";
 
     // Make sure the module timestamp rule is evaluated by the time
     // the target finishes building.
     std::string driver = this->TargetDirectory;
     driver += "/build";
-    driver = this->LocalGenerator->Convert(driver.c_str(),
-                                           cmLocalGenerator::HOME_OUTPUT,
-                                           cmLocalGenerator::MAKEFILE);
-    makeDepends << driver << ": " << obj << ".provides.build\n";
-    }
+    driver = cmSystemTools::ConvertToOutputPath(
+      this->MaybeConvertToRelativePath(binDir, driver));
+    makeDepends << driver << ": " << obj_m << ".provides.build\n";
+  }
 
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmDependsFortran::FindModule(std::string const& name,
-                                  std::string& module)
+bool cmDependsFortran::FindModule(std::string const& name, std::string& module)
 {
   // Construct possible names for the module file.
-  std::string mod_upper = cmSystemTools::UpperCase(name);
-  std::string mod_lower = name;
-  mod_upper += ".mod";
-  mod_lower += ".mod";
+  std::string mod_upper;
+  std::string mod_lower;
+  cmFortranModuleAppendUpperLower(name, mod_upper, mod_lower);
 
   // Search the include path for the module.
   std::string fullName;
-  for(std::vector<std::string>::const_iterator i =
-        this->IncludePath->begin(); i != this->IncludePath->end(); ++i)
-    {
+  for (std::string const& ip : this->IncludePath) {
     // Try the lower-case name.
-    fullName = *i;
+    fullName = ip;
     fullName += "/";
     fullName += mod_lower;
-    if(cmSystemTools::FileExists(fullName.c_str(), true))
-      {
+    if (cmSystemTools::FileExists(fullName, true)) {
       module = fullName;
       return true;
-      }
+    }
 
     // Try the upper-case name.
-    fullName = *i;
+    fullName = ip;
     fullName += "/";
     fullName += mod_upper;
-    if(cmSystemTools::FileExists(fullName.c_str(), true))
-      {
+    if (cmSystemTools::FileExists(fullName, true)) {
       module = fullName;
       return true;
-      }
     }
+  }
   return false;
 }
 
-//----------------------------------------------------------------------------
 bool cmDependsFortran::CopyModule(const std::vector<std::string>& args)
 {
   // Implements
@@ -617,71 +491,110 @@ bool cmDependsFortran::CopyModule(const std::vector<std::string>& args)
   std::string mod = args[2];
   std::string stamp = args[3];
   std::string compilerId;
-  if(args.size() >= 5)
-    {
+  if (args.size() >= 5) {
     compilerId = args[4];
-    }
+  }
+  if (!cmHasLiteralSuffix(mod, ".mod") && !cmHasLiteralSuffix(mod, ".smod")) {
+    // Support depend.make files left by older versions of CMake.
+    // They do not include the ".mod" extension.
+    mod += ".mod";
+  }
   std::string mod_dir = cmSystemTools::GetFilenamePath(mod);
-  if(!mod_dir.empty()) { mod_dir += "/"; }
+  if (!mod_dir.empty()) {
+    mod_dir += "/";
+  }
   std::string mod_upper = mod_dir;
-  mod_upper += cmSystemTools::UpperCase(cmSystemTools::GetFilenameName(mod));
   std::string mod_lower = mod_dir;
-  mod_lower += cmSystemTools::LowerCase(cmSystemTools::GetFilenameName(mod));
-  mod += ".mod";
-  mod_upper += ".mod";
-  mod_lower += ".mod";
-  if(cmSystemTools::FileExists(mod_upper.c_str(), true))
-    {
-    if(cmDependsFortran::ModulesDiffer(mod_upper.c_str(), stamp.c_str(),
-                                       compilerId.c_str()))
-      {
-      if(!cmSystemTools::CopyFileAlways(mod_upper.c_str(), stamp.c_str()))
-        {
-        std::cerr << "Error copying Fortran module from \""
-                  << mod_upper.c_str() << "\" to \"" << stamp.c_str()
-                  << "\".\n";
+  cmFortranModuleAppendUpperLower(cmSystemTools::GetFilenameName(mod),
+                                  mod_upper, mod_lower);
+  if (cmSystemTools::FileExists(mod_upper, true)) {
+    if (cmDependsFortran::ModulesDiffer(mod_upper, stamp, compilerId)) {
+      if (!cmSystemTools::CopyFileAlways(mod_upper, stamp)) {
+        std::cerr << "Error copying Fortran module from \"" << mod_upper
+                  << "\" to \"" << stamp << "\".\n";
         return false;
-        }
       }
-    return true;
     }
-  else if(cmSystemTools::FileExists(mod_lower.c_str(), true))
-    {
-    if(cmDependsFortran::ModulesDiffer(mod_lower.c_str(), stamp.c_str(),
-                                       compilerId.c_str()))
-      {
-      if(!cmSystemTools::CopyFileAlways(mod_lower.c_str(), stamp.c_str()))
-        {
-        std::cerr << "Error copying Fortran module from \""
-                  << mod_lower.c_str() << "\" to \"" << stamp.c_str()
-                  << "\".\n";
+    return true;
+  }
+  if (cmSystemTools::FileExists(mod_lower, true)) {
+    if (cmDependsFortran::ModulesDiffer(mod_lower, stamp, compilerId)) {
+      if (!cmSystemTools::CopyFileAlways(mod_lower, stamp)) {
+        std::cerr << "Error copying Fortran module from \"" << mod_lower
+                  << "\" to \"" << stamp << "\".\n";
         return false;
-        }
       }
-    return true;
     }
+    return true;
+  }
 
-  std::cerr << "Error copying Fortran module \"" << args[2].c_str()
-            << "\".  Tried \"" << mod_upper.c_str()
-            << "\" and \"" << mod_lower.c_str() << "\".\n";
+  std::cerr << "Error copying Fortran module \"" << args[2] << "\".  Tried \""
+            << mod_upper << "\" and \"" << mod_lower << "\".\n";
   return false;
 }
 
-//----------------------------------------------------------------------------
-bool cmDependsFortran::ModulesDiffer(const char* modFile,
-                                     const char* stampFile,
-                                     const char* compilerId)
+// Helper function to look for a short sequence in a stream.  If this
+// is later used for longer sequences it should be re-written using an
+// efficient string search algorithm such as Boyer-Moore.
+static bool cmFortranStreamContainsSequence(std::istream& ifs, const char* seq,
+                                            int len)
 {
-  (void)compilerId;
+  assert(len > 0);
+
+  int cur = 0;
+  while (cur < len) {
+    // Get the next character.
+    int token = ifs.get();
+    if (!ifs) {
+      return false;
+    }
+
+    // Check the character.
+    if (token == static_cast<int>(seq[cur])) {
+      ++cur;
+    } else {
+      // Assume the sequence has no repeating subsequence.
+      cur = 0;
+    }
+  }
+
+  // The entire sequence was matched.
+  return true;
+}
+
+// Helper function to compare the remaining content in two streams.
+static bool cmFortranStreamsDiffer(std::istream& ifs1, std::istream& ifs2)
+{
+  // Compare the remaining content.
+  for (;;) {
+    int ifs1_c = ifs1.get();
+    int ifs2_c = ifs2.get();
+    if (!ifs1 && !ifs2) {
+      // We have reached the end of both streams simultaneously.
+      // The streams are identical.
+      return false;
+    }
+
+    if (!ifs1 || !ifs2 || ifs1_c != ifs2_c) {
+      // We have reached the end of one stream before the other or
+      // found differing content.  The streams are different.
+      break;
+    }
+  }
+
+  return true;
+}
+
+bool cmDependsFortran::ModulesDiffer(const std::string& modFile,
+                                     const std::string& stampFile,
+                                     const std::string& compilerId)
+{
   /*
-  This following is valid for intel and gnu. For others this may be valid
-  too, but has to be proven.
+  gnu >= 4.9:
+    A mod file is an ascii file compressed with gzip.
+    Compiling twice produces identical modules.
 
-  ASSUMPTION: If one compiles the source foo.f90 which provides module bar,
-  two times then both generated bar.mod files will differ only before the
-  first linefeed (\n or 0x0A).
-
-  gnu:
+  gnu < 4.9:
     A mod file is an ascii file.
     <bar.mod>
     FORTRAN module created from /path/to/foo.f90 on Sun Dec 30 22:47:58 2007
@@ -693,335 +606,104 @@ bool cmDependsFortran::ModulesDiffer(const char* modFile,
   intel:
     A mod file is a binary file.
     However, looking into both generated bar.mod files with a hex editor
-    shows that they differ only before a linefeed (0x0A) which is located
-    some bytes in front of the absoulte path to the source file.
+    shows that they differ only before a sequence linefeed-zero (0x0A 0x00)
+    which is located some bytes in front of the absolute path to the source
+    file.
 
   sun:
-    A mod file is a binary file.  It always starts in the line of text
-    !<ftn.mod>
-    Compiling twice produces identical modules anyway, so the
-    assumption is valid.
+    A mod file is a binary file.  Compiling twice produces identical modules.
 
   others:
-    TODO: is this valid for every common fortran compiler?
+    TODO ...
   */
+
+  /* Compilers which do _not_ produce different mod content when the same
+   * source is compiled twice
+   *   -SunPro
+   */
+  if (compilerId == "SunPro") {
+    return cmSystemTools::FilesDiffer(modFile, stampFile);
+  }
+
 #if defined(_WIN32) || defined(__CYGWIN__)
-  std::ifstream finModFile(modFile, std::ios::in | std::ios::binary);
-  std::ifstream finStampFile(stampFile, std::ios::in | std::ios::binary);
+  cmsys::ifstream finModFile(modFile.c_str(), std::ios::in | std::ios::binary);
+  cmsys::ifstream finStampFile(stampFile.c_str(),
+                               std::ios::in | std::ios::binary);
 #else
-  std::ifstream finModFile(modFile, std::ios::in);
-  std::ifstream finStampFile(stampFile, std::ios::in);
+  cmsys::ifstream finModFile(modFile.c_str());
+  cmsys::ifstream finStampFile(stampFile.c_str());
 #endif
-  if(!finModFile || !finStampFile)
-    {
+  if (!finModFile || !finStampFile) {
     // At least one of the files does not exist.  The modules differ.
     return true;
-    }
+  }
 
-  // Remove the first line from each file and make sure newlines were found.
-  std::string modLine;
-  bool modHasNewline = false;
-  if(!cmSystemTools::GetLineFromStream(finModFile, modLine,
-                                       &modHasNewline, 1024) ||
-     !modHasNewline)
-    {
-    std::cerr
-      << "WARNING in cmDependsFortran::ModulesDiffer:\n"
-      << "The fortran module \"" << modFile << "\" format is not known.\n"
-      << "Please report this at: http://www.cmake.org/Bug\n"
-      << "\n";
-    return true;
-    }
-  std::string stampLine;
-  bool stampHasNewline = false;
-  if(!cmSystemTools::GetLineFromStream(finStampFile, stampLine,
-                                       &stampHasNewline, 1024) ||
-     !stampHasNewline)
-    {
-    // The stamp file is invalid.
-    return true;
-    }
+  /* Compilers which _do_ produce different mod content when the same
+   * source is compiled twice
+   *   -GNU
+   *   -Intel
+   *
+   * Eat the stream content until all recompile only related changes
+   * are left behind.
+   */
+  if (compilerId == "GNU") {
+    // GNU Fortran 4.9 and later compress .mod files with gzip
+    // but also do not include a date so we can fall through to
+    // compare them without skipping any prefix.
+    unsigned char hdr[2];
+    bool okay = !finModFile.read(reinterpret_cast<char*>(hdr), 2).fail();
+    finModFile.seekg(0);
+    if (!okay || hdr[0] != 0x1f || hdr[1] != 0x8b) {
+      const char seq[1] = { '\n' };
+      const int seqlen = 1;
 
-  // Compare the remaining content.
-  for(;;)
-    {
-    int mod_c = finModFile.get();
-    int stamp_c = finStampFile.get();
-    if(!finModFile && !finStampFile)
-      {
-      // We have reached the end of both files simultaneously.
-      // The modules are identical.
-      return false;
-      }
-    else if(!finModFile || !finStampFile || mod_c != stamp_c)
-      {
-      // We have reached the end of one file before the other.
-      // The modules are different.
-      break;
-      }
-    }
-
-   // The modules are different.
-   return true;
-}
-
-//----------------------------------------------------------------------------
-bool cmDependsFortran::FindIncludeFile(const char* dir,
-                                       const char* includeName,
-                                       std::string& fileName)
-{
-  // If the file is a full path, include it directly.
-  if(cmSystemTools::FileIsFullPath(includeName))
-    {
-    fileName = includeName;
-    return cmSystemTools::FileExists(fileName.c_str(), true);
-    }
-  else
-    {
-    // Check for the file in the directory containing the including
-    // file.
-    std::string fullName = dir;
-    fullName += "/";
-    fullName += includeName;
-    if(cmSystemTools::FileExists(fullName.c_str(), true))
-      {
-      fileName = fullName;
-      return true;
-      }
-
-    // Search the include path for the file.
-    for(std::vector<std::string>::const_iterator i = 
-          this->IncludePath->begin(); i != this->IncludePath->end(); ++i)
-      {
-      fullName = *i;
-      fullName += "/";
-      fullName += includeName;
-      if(cmSystemTools::FileExists(fullName.c_str(), true))
-        {
-        fileName = fullName;
+      if (!cmFortranStreamContainsSequence(finModFile, seq, seqlen)) {
+        // The module is of unexpected format.  Assume it is different.
+        std::cerr << compilerId << " fortran module " << modFile
+                  << " has unexpected format." << std::endl;
         return true;
-        }
+      }
+
+      if (!cmFortranStreamContainsSequence(finStampFile, seq, seqlen)) {
+        // The stamp must differ if the sequence is not contained.
+        return true;
       }
     }
-  return false;
-}
+  } else if (compilerId == "Intel") {
+    const char seq[2] = { '\n', '\0' };
+    const int seqlen = 2;
 
-//----------------------------------------------------------------------------
-cmDependsFortranParser_s
-::cmDependsFortranParser_s(cmDependsFortran* self,
-                           cmDependsFortranSourceInfo& info):
-  Self(self), Info(info)
-{
-  this->InInterface = 0;
+    // Skip the leading byte which appears to be a version number.
+    // We do not need to check for an error because the sequence search
+    // below will fail in that case.
+    finModFile.get();
+    finStampFile.get();
 
-  // Initialize the lexical scanner.
-  cmDependsFortran_yylex_init(&this->Scanner);
-  cmDependsFortran_yyset_extra(this, this->Scanner);
-
-  // Create a dummy buffer that is never read but is the fallback
-  // buffer when the last file is popped off the stack.
-  YY_BUFFER_STATE buffer =
-    cmDependsFortran_yy_create_buffer(0, 4, this->Scanner);
-  cmDependsFortran_yy_switch_to_buffer(buffer, this->Scanner);
-}
-
-//----------------------------------------------------------------------------
-cmDependsFortranParser_s::~cmDependsFortranParser_s()
-{
-  cmDependsFortran_yylex_destroy(this->Scanner);
-}
-
-//----------------------------------------------------------------------------
-bool cmDependsFortranParser_FilePush(cmDependsFortranParser* parser,
-                                    const char* fname)
-{
-  // Open the new file and push it onto the stack.  Save the old
-  // buffer with it on the stack.
-  if(FILE* file = fopen(fname, "rb"))
-    {
-    YY_BUFFER_STATE current =
-      cmDependsFortranLexer_GetCurrentBuffer(parser->Scanner);
-    std::string dir = cmSystemTools::GetParentDirectory(fname);
-    cmDependsFortranFile f(file, current, dir);
-    YY_BUFFER_STATE buffer =
-      cmDependsFortran_yy_create_buffer(0, 16384, parser->Scanner);
-    cmDependsFortran_yy_switch_to_buffer(buffer, parser->Scanner);
-    parser->FileStack.push(f);
-    return 1;
+    if (!cmFortranStreamContainsSequence(finModFile, seq, seqlen)) {
+      // The module is of unexpected format.  Assume it is different.
+      std::cerr << compilerId << " fortran module " << modFile
+                << " has unexpected format." << std::endl;
+      return true;
     }
-  else
-    {
-    return 0;
+
+    if (!cmFortranStreamContainsSequence(finStampFile, seq, seqlen)) {
+      // The stamp must differ if the sequence is not contained.
+      return true;
     }
+  }
+
+  // Compare the remaining content.  If no compiler id matched above,
+  // including the case none was given, this will compare the whole
+  // content.
+  return cmFortranStreamsDiffer(finModFile, finStampFile);
 }
 
-//----------------------------------------------------------------------------
-bool cmDependsFortranParser_FilePop(cmDependsFortranParser* parser)
+std::string cmDependsFortran::MaybeConvertToRelativePath(
+  std::string const& base, std::string const& path)
 {
-  // Pop one file off the stack and close it.  Switch the lexer back
-  // to the next one on the stack.
-  if(parser->FileStack.empty())
-    {
-    return 0;
-    }
-  else
-    {
-    cmDependsFortranFile f = parser->FileStack.top(); parser->FileStack.pop();
-    fclose(f.File);
-    YY_BUFFER_STATE current =
-      cmDependsFortranLexer_GetCurrentBuffer(parser->Scanner);
-    cmDependsFortran_yy_delete_buffer(current, parser->Scanner);
-    cmDependsFortran_yy_switch_to_buffer(f.Buffer, parser->Scanner);
-    return 1;
-    }
-}
-
-//----------------------------------------------------------------------------
-int cmDependsFortranParser_Input(cmDependsFortranParser* parser,
-                                 char* buffer, size_t bufferSize)
-{
-  // Read from the file on top of the stack.  If the stack is empty,
-  // the end of the translation unit has been reached.
-  if(!parser->FileStack.empty())
-    {
-    FILE* file = parser->FileStack.top().File;
-    return (int)fread(buffer, 1, bufferSize, file);
-    }
-  return 0;
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_StringStart(cmDependsFortranParser* parser)
-{
-  parser->TokenString = "";
-}
-
-//----------------------------------------------------------------------------
-const char* cmDependsFortranParser_StringEnd(cmDependsFortranParser* parser)
-{
-  return parser->TokenString.c_str();
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_StringAppend(cmDependsFortranParser* parser,
-                                         char c)
-{
-  parser->TokenString += c;
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_SetInInterface(cmDependsFortranParser* parser,
-                                           bool in)
-{
-  parser->InInterface = in;
-}
-
-//----------------------------------------------------------------------------
-bool cmDependsFortranParser_GetInInterface(cmDependsFortranParser* parser)
-{
-  return parser->InInterface;
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_SetOldStartcond(cmDependsFortranParser* parser,
-                                            int arg)
-{
-  parser->OldStartcond = arg;
-}
-
-//----------------------------------------------------------------------------
-int cmDependsFortranParser_GetOldStartcond(cmDependsFortranParser* parser)
-{
-  return parser->OldStartcond;
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_Error(cmDependsFortranParser*, const char*)
-{
-  // If there is a parser error just ignore it.  The source will not
-  // compile and the user will edit it.  Then dependencies will have
-  // to be regenerated anyway.
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleUse(cmDependsFortranParser* parser,
-                                    const char* name)
-{
-  parser->Info.Requires.insert(cmSystemTools::LowerCase(name) );
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleInclude(cmDependsFortranParser* parser,
-                                        const char* name)
-{
-  // If processing an include statement there must be an open file.
-  assert(!parser->FileStack.empty());
-
-  // Get the directory containing the source in which the include
-  // statement appears.  This is always the first search location for
-  // Fortran include files.
-  std::string dir = parser->FileStack.top().Directory;
-
-  // Find the included file.  If it cannot be found just ignore the
-  // problem because either the source will not compile or the user
-  // does not care about depending on this included source.
-  std::string fullName;
-  if(parser->Self->FindIncludeFile(dir.c_str(), name, fullName))
-    {
-    // Found the included file.  Save it in the set of included files.
-    parser->Info.Includes.insert(fullName);
-
-    // Parse it immediately to translate the source inline.
-    cmDependsFortranParser_FilePush(parser, fullName.c_str());
-    }
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleModule(cmDependsFortranParser* parser,
-                                       const char* name)
-{
-  if(!parser->InInterface )
-    {
-    parser->Info.Provides.insert(cmSystemTools::LowerCase(name));
-    }
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleDefine(cmDependsFortranParser*, const char*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleUndef(cmDependsFortranParser*, const char*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleIfdef(cmDependsFortranParser*, const char*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleIfndef(cmDependsFortranParser*, const char*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleIf(cmDependsFortranParser*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleElif(cmDependsFortranParser*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleElse(cmDependsFortranParser*)
-{
-}
-
-//----------------------------------------------------------------------------
-void cmDependsFortranParser_RuleEndif(cmDependsFortranParser*)
-{
+  if (!this->LocalGenerator->GetStateSnapshot().GetDirectory().ContainsBoth(
+        base, path)) {
+    return path;
+  }
+  return cmSystemTools::ForceToRelativePath(base, path);
 }

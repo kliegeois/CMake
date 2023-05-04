@@ -1,15 +1,30 @@
-# - MACRO_ADD_FILE_DEPENDENCIES(<_file> depend_files...)
-# MACRO_OPTIONAL_FIND_PACKAGE( <name> [QUIT] )
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-MACRO (MACRO_ADD_FILE_DEPENDENCIES _file)
+#[=======================================================================[.rst:
+MacroAddFileDependencies
+------------------------
 
-   GET_SOURCE_FILE_PROPERTY(_deps ${_file} OBJECT_DEPENDS)
-   if (_deps)
-      set(_deps ${_deps} ${ARGN})
-   else (_deps)
-      set(_deps ${ARGN})
-   endif (_deps)
+MACRO_ADD_FILE_DEPENDENCIES(<_file> depend_files...)
 
-   SET_SOURCE_FILES_PROPERTIES(${_file} PROPERTIES OBJECT_DEPENDS "${_deps}")
+Using the macro MACRO_ADD_FILE_DEPENDENCIES() is discouraged.  There
+are usually better ways to specify the correct dependencies.
 
-ENDMACRO (MACRO_ADD_FILE_DEPENDENCIES)
+MACRO_ADD_FILE_DEPENDENCIES(<_file> depend_files...) is just a
+convenience wrapper around the OBJECT_DEPENDS source file property.
+You can just use set_property(SOURCE <file> APPEND PROPERTY
+OBJECT_DEPENDS depend_files) instead.
+#]=======================================================================]
+
+macro (MACRO_ADD_FILE_DEPENDENCIES _file)
+
+  get_source_file_property(_deps ${_file} OBJECT_DEPENDS)
+  if (_deps)
+    set(_deps ${_deps} ${ARGN})
+  else ()
+    set(_deps ${ARGN})
+  endif ()
+
+  set_source_files_properties(${_file} PROPERTIES OBJECT_DEPENDS "${_deps}")
+
+endmacro ()

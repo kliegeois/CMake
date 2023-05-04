@@ -1,104 +1,83 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmQTWrapUICommand.h"
 
+#include "cmCustomCommandLines.h"
+#include "cmMakefile.h"
+#include "cmRange.h"
+#include "cmSourceFile.h"
+#include "cmSystemTools.h"
+
+#include <utility>
+
+class cmExecutionStatus;
+
 // cmQTWrapUICommand
-bool cmQTWrapUICommand::InitialPass(std::vector<std::string> const& argsIn)
+bool cmQTWrapUICommand::InitialPass(std::vector<std::string> const& args,
+                                    cmExecutionStatus&)
 {
-  if(argsIn.size() < 4 )
-    {
+  if (args.size() < 4) {
     this->SetError("called with incorrect number of arguments");
     return false;
-    }
-
-  // This command supports source list inputs for compatibility.
-  std::vector<std::string> args;
-  this->Makefile->ExpandSourceListArguments(argsIn, args, 3);
+  }
 
   // Get the uic and moc executables to run in the custom commands.
-  const char* uic_exe =
+  std::string const& uic_exe =
     this->Makefile->GetRequiredDefinition("QT_UIC_EXECUTABLE");
-  const char* moc_exe =
+  std::string const& moc_exe =
     this->Makefile->GetRequiredDefinition("QT_MOC_EXECUTABLE");
 
   // Get the variable holding the list of sources.
   std::string const& headerList = args[1];
   std::string const& sourceList = args[2];
-  std::string headerListValue =
-    this->Makefile->GetSafeDefinition(headerList.c_str());
-  std::string sourceListValue =
-    this->Makefile->GetSafeDefinition(sourceList.c_str());
+  std::string headerListValue = this->Makefile->GetSafeDefinition(headerList);
+  std::string sourceListValue = this->Makefile->GetSafeDefinition(sourceList);
 
   // Create rules for all sources listed.
-  for(std::vector<std::string>::iterator j = (args.begin() + 3);
-      j != args.end(); ++j)
-    {
-    cmSourceFile *curr = this->Makefile->GetSource(j->c_str());
+  for (std::string const& arg : cmMakeRange(args).advance(3)) {
+    cmSourceFile* curr = this->Makefile->GetSource(arg);
     // if we should wrap the class
-    if(!(curr && curr->GetPropertyAsBool("WRAP_EXCLUDE")))
-      {
+    if (!(curr && curr->GetPropertyAsBool("WRAP_EXCLUDE"))) {
       // Compute the name of the files to generate.
       std::string srcName =
-        cmSystemTools::GetFilenameWithoutLastExtension(*j);
-      std::string hName = this->Makefile->GetCurrentOutputDirectory();
+        cmSystemTools::GetFilenameWithoutLastExtension(arg);
+      std::string hName = this->Makefile->GetCurrentBinaryDirectory();
       hName += "/";
       hName += srcName;
       hName += ".h";
-      std::string cxxName = this->Makefile->GetCurrentOutputDirectory();
+      std::string cxxName = this->Makefile->GetCurrentBinaryDirectory();
       cxxName += "/";
       cxxName += srcName;
       cxxName += ".cxx";
-      std::string mocName = this->Makefile->GetCurrentOutputDirectory();
+      std::string mocName = this->Makefile->GetCurrentBinaryDirectory();
       mocName += "/moc_";
       mocName += srcName;
       mocName += ".cxx";
 
       // Compute the name of the ui file from which to generate others.
       std::string uiName;
-      if(cmSystemTools::FileIsFullPath(j->c_str()))
-        {
-        uiName = *j;
+      if (cmSystemTools::FileIsFullPath(arg)) {
+        uiName = arg;
+      } else {
+        if (curr && curr->GetIsGenerated()) {
+          uiName = this->Makefile->GetCurrentBinaryDirectory();
+        } else {
+          uiName = this->Makefile->GetCurrentSourceDirectory();
         }
-      else
-        {
-        if(curr && curr->GetPropertyAsBool("GENERATED"))
-          {
-          uiName = this->Makefile->GetCurrentOutputDirectory();
-          }
-        else
-          {
-          uiName = this->Makefile->GetCurrentDirectory();
-          }
         uiName += "/";
-        uiName += *j;
-        }
+        uiName += arg;
+      }
 
       // create the list of headers
-      if(!headerListValue.empty())
-        {
+      if (!headerListValue.empty()) {
         headerListValue += ";";
-        }
+      }
       headerListValue += hName;
 
       // create the list of sources
-      if(!sourceListValue.empty())
-        {
+      if (!sourceListValue.empty()) {
         sourceListValue += ";";
-        }
+      }
       sourceListValue += cxxName;
       sourceListValue += ";";
       sourceListValue += mocName;
@@ -110,7 +89,7 @@ bool cmQTWrapUICommand::InitialPass(std::vector<std::string> const& argsIn)
       hCommand.push_back(hName);
       hCommand.push_back(uiName);
       cmCustomCommandLines hCommandLines;
-      hCommandLines.push_back(hCommand);
+      hCommandLines.push_back(std::move(hCommand));
 
       cmCustomCommandLine cxxCommand;
       cxxCommand.push_back(uic_exe);
@@ -120,7 +99,7 @@ bool cmQTWrapUICommand::InitialPass(std::vector<std::string> const& argsIn)
       cxxCommand.push_back(cxxName);
       cxxCommand.push_back(uiName);
       cmCustomCommandLines cxxCommandLines;
-      cxxCommandLines.push_back(cxxCommand);
+      cxxCommandLines.push_back(std::move(cxxCommand));
 
       cmCustomCommandLine mocCommand;
       mocCommand.push_back(moc_exe);
@@ -128,43 +107,32 @@ bool cmQTWrapUICommand::InitialPass(std::vector<std::string> const& argsIn)
       mocCommand.push_back(mocName);
       mocCommand.push_back(hName);
       cmCustomCommandLines mocCommandLines;
-      mocCommandLines.push_back(mocCommand);
+      mocCommandLines.push_back(std::move(mocCommand));
 
       std::vector<std::string> depends;
       depends.push_back(uiName);
-      const char* no_main_dependency = 0;
-      const char* no_comment = 0;
-      const char* no_working_dir = 0;
-      this->Makefile->AddCustomCommandToOutput(hName.c_str(),
-                                               depends,
-                                               no_main_dependency,
-                                               hCommandLines,
-                                               no_comment,
-                                               no_working_dir);
+      std::string no_main_dependency;
+      const char* no_comment = nullptr;
+      const char* no_working_dir = nullptr;
+      this->Makefile->AddCustomCommandToOutput(
+        hName, depends, no_main_dependency, hCommandLines, no_comment,
+        no_working_dir);
 
       depends.push_back(hName);
-      this->Makefile->AddCustomCommandToOutput(cxxName.c_str(),
-                                               depends,
-                                               no_main_dependency,
-                                               cxxCommandLines,
-                                               no_comment,
-                                               no_working_dir);
+      this->Makefile->AddCustomCommandToOutput(
+        cxxName, depends, no_main_dependency, cxxCommandLines, no_comment,
+        no_working_dir);
 
       depends.clear();
       depends.push_back(hName);
-      this->Makefile->AddCustomCommandToOutput(mocName.c_str(),
-                                               depends,
-                                               no_main_dependency,
-                                               mocCommandLines,
-                                               no_comment,
-                                               no_working_dir);
-      }
+      this->Makefile->AddCustomCommandToOutput(
+        mocName, depends, no_main_dependency, mocCommandLines, no_comment,
+        no_working_dir);
     }
+  }
 
   // Store the final list of source files and headers.
-  this->Makefile->AddDefinition(sourceList.c_str(),
-                                sourceListValue.c_str());
-  this->Makefile->AddDefinition(headerList.c_str(),
-                                headerListValue.c_str());
+  this->Makefile->AddDefinition(sourceList, sourceListValue.c_str());
+  this->Makefile->AddDefinition(headerList, headerListValue.c_str());
   return true;
 }

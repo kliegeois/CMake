@@ -1,48 +1,67 @@
-# - Find SWIG
-# This module finds an installed SWIG.  It sets the following variables:
-#  SWIG_FOUND - set to true if SWIG is found
-#  SWIG_DIR - the directory where swig is installed
-#  SWIG_EXECUTABLE - the path to the swig executable
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-SET(SWIG_FOUND FOOBAR)
-FIND_PATH(SWIG_DIR
-  SWIGConfig.cmake
-  /usr/share/swig1.3
-  /usr/lib/swig1.3
-  /usr/local/share/swig1.3)
-FIND_PATH(SWIG_DIR
-  swig.swg
-  /usr/share/swig1.3
-  /usr/lib/swig1.3
-  /usr/local/share/swig1.3)
-IF(EXISTS ${SWIG_DIR})
-  IF("x${SWIG_DIR}x" STREQUAL "x${CMAKE_ROOT}/Modulesx")
-    MESSAGE("SWIG_DIR should not be modules subdirectory of CMake")
-  ENDIF("x${SWIG_DIR}x" STREQUAL "x${CMAKE_ROOT}/Modulesx")
+#[=======================================================================[.rst:
+FindSWIG
+--------
 
-  IF(EXISTS ${SWIG_DIR}/SWIGConfig.cmake)
-    INCLUDE(${SWIG_DIR}/SWIGConfig.cmake)
-    SET(SWIG_FOUND 1)
-  ELSE(EXISTS ${SWIG_DIR}/SWIGConfig.cmake)
-    FIND_PROGRAM(SWIG_EXECUTABLE
-      NAMES swig-1.3 swig
-      PATHS ${SWIG_DIR} ${SWIG_DIR}/.. ${SWIG_DIR}/../../bin /usr/bin /usr/local/bin )
-    SET(SWIG_USE_FILE ${CMAKE_ROOT}/Modules/UseSWIG.cmake)
-  ENDIF(EXISTS ${SWIG_DIR}/SWIGConfig.cmake)
-ENDIF(EXISTS ${SWIG_DIR})
+Find Simplified Wrapper and Interface Generator (SWIG)
 
-IF("x${SWIG_FOUND}x" STREQUAL "xFOOBARx")
-  SET(SWIG_FOUND 0)
-  IF(EXISTS ${SWIG_DIR})
-    IF(EXISTS ${SWIG_USE_FILE})
-      IF(EXISTS ${SWIG_EXECUTABLE})
-        SET(SWIG_FOUND 1)
-      ENDIF(EXISTS ${SWIG_EXECUTABLE})
-    ENDIF(EXISTS ${SWIG_USE_FILE})
-  ENDIF(EXISTS ${SWIG_DIR})
-  IF(NOT ${SWIG_FOUND})
-    IF(${SWIG_FIND_REQUIRED})
-      MESSAGE(FATAL_ERROR "Swig was not found on the system. Please specify the location of Swig.")
-    ENDIF(${SWIG_FIND_REQUIRED})
-  ENDIF(NOT ${SWIG_FOUND})
-ENDIF("x${SWIG_FOUND}x" STREQUAL "xFOOBARx")
+This module finds an installed SWIG.  It sets the following variables:
+
+::
+
+  SWIG_FOUND - set to "True" if SWIG is found
+  SWIG_DIR - the directory where swig is installed
+  SWIG_EXECUTABLE - the path to the swig executable
+  SWIG_VERSION   - the version number of the swig executable
+
+
+
+The minimum required version of SWIG can be specified using the
+standard syntax, e.g.   :command:`find_package(SWIG 1.1)`
+
+All information is collected from the ``SWIG_EXECUTABLE``, so the version
+to be found can be changed from the command line by means of setting
+``SWIG_EXECUTABLE``
+#]=======================================================================]
+
+find_program(SWIG_EXECUTABLE NAMES swig4.0 swig3.0 swig2.0 swig)
+
+if(SWIG_EXECUTABLE)
+  execute_process(COMMAND ${SWIG_EXECUTABLE} -swiglib
+    OUTPUT_VARIABLE SWIG_swiglib_output
+    ERROR_VARIABLE SWIG_swiglib_error
+    RESULT_VARIABLE SWIG_swiglib_result)
+
+  if(SWIG_swiglib_result)
+    if(SWIG_FIND_REQUIRED)
+      message(SEND_ERROR "Command \"${SWIG_EXECUTABLE} -swiglib\" failed with output:\n${SWIG_swiglib_error}")
+    else()
+      message(STATUS "Command \"${SWIG_EXECUTABLE} -swiglib\" failed with output:\n${SWIG_swiglib_error}")
+    endif()
+  else()
+    string(REGEX REPLACE "[\n\r]+" ";" SWIG_swiglib_output ${SWIG_swiglib_output})
+    find_path(SWIG_DIR swig.swg PATHS ${SWIG_swiglib_output} NO_CMAKE_FIND_ROOT_PATH)
+    if(SWIG_DIR)
+      set(SWIG_USE_FILE ${CMAKE_CURRENT_LIST_DIR}/UseSWIG.cmake)
+      execute_process(COMMAND ${SWIG_EXECUTABLE} -version
+        OUTPUT_VARIABLE SWIG_version_output
+        ERROR_VARIABLE SWIG_version_output
+        RESULT_VARIABLE SWIG_version_result)
+      if(SWIG_version_result)
+        message(SEND_ERROR "Command \"${SWIG_EXECUTABLE} -version\" failed with output:\n${SWIG_version_output}")
+      else()
+        string(REGEX REPLACE ".*SWIG Version[^0-9.]*\([0-9.]+\).*" "\\1"
+          SWIG_version_output "${SWIG_version_output}")
+        set(SWIG_VERSION ${SWIG_version_output} CACHE STRING "Swig version" FORCE)
+      endif()
+    endif()
+  endif()
+endif()
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(SWIG  REQUIRED_VARS SWIG_EXECUTABLE SWIG_DIR
+                                        VERSION_VAR SWIG_VERSION )
+
+mark_as_advanced(SWIG_DIR SWIG_VERSION SWIG_EXECUTABLE)

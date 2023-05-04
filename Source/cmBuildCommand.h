@@ -1,28 +1,21 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmBuildCommand_h
 #define cmBuildCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
 
+class cmExecutionStatus;
+
 /** \class cmBuildCommand
- * \brief Build a CMAKE variable
+ * \brief build_command command
  *
- * cmBuildCommand sets a variable to a value with expansion.  
+ * cmBuildCommand implements the build_command CMake command
  */
 class cmBuildCommand : public cmCommand
 {
@@ -30,47 +23,27 @@ public:
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmBuildCommand;
-    }
+  cmCommand* Clone() override { return new cmBuildCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
   /**
-   * The name of the command as specified in CMakeList.txt.
+   * The primary command signature with optional, KEYWORD-based args.
    */
-  virtual const char* GetName() {return "build_command";}
-  
+  virtual bool MainSignature(std::vector<std::string> const& args);
+
   /**
-   * Succinct documentation.
+   * Legacy "exactly 2 args required" signature.
    */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Get the command line that will build this project.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  build_command(<variable> <makecommand>)\n"
-      "Sets the given <variable> to a string containing the command that "
-      "will build this project from the root of the build tree using the "
-      "build tool given by <makecommand>.  <makecommand> should be msdev, "
-      "nmake, make or one of the end user build tools.  "
-      "This is useful for configuring testing systems.";
-    }
-  
-  cmTypeMacro(cmBuildCommand, cmCommand);
+  virtual bool TwoArgsSignature(std::vector<std::string> const& args);
+
+private:
+  bool IgnoreErrors() const;
 };
-
-
 
 #endif

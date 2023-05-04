@@ -1,79 +1,36 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmQTWrapUICommand_h
 #define cmQTWrapUICommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
 
-#include "cmSourceFile.h"
+class cmExecutionStatus;
 
 /** \class cmQTWrapUICommand
- * \brief Create .h and .cxx files rules for QT user interfaces files
+ * \brief Create .h and .cxx files rules for Qt user interfaces files
  *
- * cmQTWrapUICommand is used to create wrappers for QT classes into normal C++
+ * cmQTWrapUICommand is used to create wrappers for Qt classes into normal C++
  */
 class cmQTWrapUICommand : public cmCommand
 {
 public:
-  cmTypeMacro(cmQTWrapUICommand, cmCommand);
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmQTWrapUICommand;
-    }
+  cmCommand* Clone() override { return new cmQTWrapUICommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "qt_wrap_ui";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Create Qt user interfaces Wrappers.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  qt_wrap_ui(resultingLibraryName HeadersDestName\n"
-      "             SourcesDestName SourceLists ...)\n"
-      "Produce .h and .cxx files for all the .ui files listed "
-      "in the SourceLists.  "
-      "The .h files will be added to the library using the HeadersDestName"
-      "source list.  "
-      "The .cxx files will be added to the library using the SourcesDestName"
-      "source list.";
-    }
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 };
-
-
 
 #endif

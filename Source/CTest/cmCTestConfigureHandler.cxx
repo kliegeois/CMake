@@ -1,128 +1,103 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCTestConfigureHandler.h"
 
 #include "cmCTest.h"
+#include "cmDuration.h"
 #include "cmGeneratedFileStream.h"
-#include "cmake.h"
-#include <cmsys/Process.h>
+#include "cmXMLWriter.h"
 
+#include <chrono>
+#include <ostream>
+#include <string>
 
-//----------------------------------------------------------------------
-cmCTestConfigureHandler::cmCTestConfigureHandler()
-{
-}
+cmCTestConfigureHandler::cmCTestConfigureHandler() = default;
 
-//----------------------------------------------------------------------
 void cmCTestConfigureHandler::Initialize()
 {
   this->Superclass::Initialize();
 }
 
-//----------------------------------------------------------------------
-//clearly it would be nice if this were broken up into a few smaller
-//functions and commented...
+// clearly it would be nice if this were broken up into a few smaller
+// functions and commented...
 int cmCTestConfigureHandler::ProcessHandler()
 {
-  cmCTestLog(this->CTest, HANDLER_OUTPUT, "Configure project" << std::endl);
-  std::string cCommand
-    = this->CTest->GetCTestConfiguration("ConfigureCommand");
-  if ( cCommand.size() == 0 )
-    {
+  cmCTestOptionalLog(this->CTest, HANDLER_OUTPUT,
+                     "Configure project" << std::endl, this->Quiet);
+  std::string cCommand =
+    this->CTest->GetCTestConfiguration("ConfigureCommand");
+  if (cCommand.empty()) {
     cmCTestLog(this->CTest, ERROR_MESSAGE,
-      "Cannot find ConfigureCommand key in the DartConfiguration.tcl"
-      << std::endl);
+               "Cannot find ConfigureCommand key in the DartConfiguration.tcl"
+                 << std::endl);
     return -1;
-    }
+  }
 
-  std::string buildDirectory
-    = this->CTest->GetCTestConfiguration("BuildDirectory");
-  if ( buildDirectory.size() == 0 )
-    {
+  std::string buildDirectory =
+    this->CTest->GetCTestConfiguration("BuildDirectory");
+  if (buildDirectory.empty()) {
     cmCTestLog(this->CTest, ERROR_MESSAGE,
-      "Cannot find BuildDirectory  key in the DartConfiguration.tcl"
-      << std::endl);
+               "Cannot find BuildDirectory  key in the DartConfiguration.tcl"
+                 << std::endl);
     return -1;
-    }
+  }
 
-  double elapsed_time_start = cmSystemTools::GetTime();
+  auto elapsed_time_start = std::chrono::steady_clock::now();
   std::string output;
   int retVal = 0;
   int res = 0;
-  if ( !this->CTest->GetShowOnly() )
-    {
+  if (!this->CTest->GetShowOnly()) {
     cmGeneratedFileStream os;
-    if ( !this->StartResultingXML("Configure", os) )
-      {
-      cmCTestLog(this->CTest, ERROR_MESSAGE, "Cannot open configure file"
-        << std::endl);
+    if (!this->StartResultingXML(cmCTest::PartConfigure, "Configure", os)) {
+      cmCTestLog(this->CTest, ERROR_MESSAGE,
+                 "Cannot open configure file" << std::endl);
       return 1;
-      }
+    }
     std::string start_time = this->CTest->CurrentTime();
+    auto start_time_time = std::chrono::system_clock::now();
 
     cmGeneratedFileStream ofs;
     this->StartLogFile("Configure", ofs);
-    cmCTestLog(this->CTest, HANDLER_VERBOSE_OUTPUT, "Configure with command: "
-      << cCommand.c_str() << std::endl);
-    res = this->CTest->RunMakeCommand(cCommand.c_str(), &output,
-      &retVal, buildDirectory.c_str(),
-      0, ofs);
+    cmCTestOptionalLog(this->CTest, HANDLER_VERBOSE_OUTPUT,
+                       "Configure with command: " << cCommand << std::endl,
+                       this->Quiet);
+    res = this->CTest->RunMakeCommand(cCommand, output, &retVal,
+                                      buildDirectory.c_str(),
+                                      cmDuration::zero(), ofs);
 
-    if ( ofs )
-      {
+    if (ofs) {
       ofs.close();
-      }
+    }
 
-    if ( os )
-      {
-      this->CTest->StartXML(os);
-      os << "<Configure>\n"
-         << "\t<StartDateTime>" << start_time << "</StartDateTime>"
-         << std::endl;
-      if ( res == cmsysProcess_State_Exited && retVal )
-        {
-        os << retVal;
-        }
-      os << "<ConfigureCommand>" << cCommand.c_str() << "</ConfigureCommand>"
-        << std::endl;
-      cmCTestLog(this->CTest, DEBUG, "End" << std::endl);
-      os << "<Log>" << cmCTest::MakeXMLSafe(output) << "</Log>" << std::endl;
-      std::string end_time = this->CTest->CurrentTime();
-      os << "\t<ConfigureStatus>" << retVal << "</ConfigureStatus>\n"
-         << "\t<EndDateTime>" << end_time << "</EndDateTime>\n"
-         << "<ElapsedMinutes>"
-         << static_cast<int>(
-           (cmSystemTools::GetTime() - elapsed_time_start)/6)/10.0
-         << "</ElapsedMinutes>"
-         << "</Configure>" << std::endl;
-      this->CTest->EndXML(os);
-      }
+    if (os) {
+      cmXMLWriter xml(os);
+      this->CTest->StartXML(xml, this->AppendXML);
+      this->CTest->GenerateSubprojectsOutput(xml);
+      xml.StartElement("Configure");
+      xml.Element("StartDateTime", start_time);
+      xml.Element("StartConfigureTime", start_time_time);
+      xml.Element("ConfigureCommand", cCommand);
+      cmCTestOptionalLog(this->CTest, DEBUG, "End" << std::endl, this->Quiet);
+      xml.Element("Log", output);
+      xml.Element("ConfigureStatus", retVal);
+      xml.Element("EndDateTime", this->CTest->CurrentTime());
+      xml.Element("EndConfigureTime", std::chrono::system_clock::now());
+      xml.Element("ElapsedMinutes",
+                  std::chrono::duration_cast<std::chrono::minutes>(
+                    std::chrono::steady_clock::now() - elapsed_time_start)
+                    .count());
+      xml.EndElement(); // Configure
+      this->CTest->EndXML(xml);
     }
-  else
-    {
-    cmCTestLog(this->CTest, DEBUG, "Configure with command: " << cCommand
-      << std::endl);
-    }
-  if (! res || retVal )
-    {
+  } else {
+    cmCTestOptionalLog(this->CTest, DEBUG,
+                       "Configure with command: " << cCommand << std::endl,
+                       this->Quiet);
+  }
+  if (!res || retVal) {
     cmCTestLog(this->CTest, ERROR_MESSAGE,
-      "Error(s) when updating the project" << std::endl);
+               "Error(s) when configuring the project" << std::endl);
     return -1;
-    }
+  }
   return 0;
 }

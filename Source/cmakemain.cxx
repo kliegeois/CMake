@@ -1,503 +1,715 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-// include these first, otherwise there will be problems on Windows 
-// with GetCurrentDirectory() being redefined 
-#ifdef CMAKE_BUILD_WITH_CMAKE
-#include "cmDynamicLoader.h"
-#include "cmDocumentation.h"
-#endif
-
-#include "cmake.h"
-#include "cmCacheManager.h"
-#include "cmListFileCache.h"
-#include "cmakewizard.h"
-#include "cmSourceFile.h"
+#include "cmAlgorithms.h"
+#include "cmDocumentationEntry.h" // IWYU pragma: keep
 #include "cmGlobalGenerator.h"
-#include "cmLocalGenerator.h"
 #include "cmMakefile.h"
+#include "cmState.h"
+#include "cmStateTypes.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
+#include "cmcmd.h"
 
 #ifdef CMAKE_BUILD_WITH_CMAKE
-//----------------------------------------------------------------------------
-static const char * cmDocumentationName[][3] =
-{
-  {0,
-   "  cmake - Cross-Platform Makefile Generator.", 0},
-  {0,0,0}
-};
-
-//----------------------------------------------------------------------------
-static const char * cmDocumentationUsage[][3] =
-{
-  {0,
-   "  cmake [options] <path-to-source>\n"
-   "  cmake [options] <path-to-existing-build>", 0},
-  {0,0,0}
-};
-
-//----------------------------------------------------------------------------
-static const char * cmDocumentationDescription[][3] =
-{
-  {0,
-   "The \"cmake\" executable is the CMake command-line interface.  It may "
-   "be used to configure projects in scripts.  Project configuration "
-   "settings "
-   "may be specified on the command line with the -D option.  The -i option "
-   "will cause cmake to interactively prompt for such settings.", 0},
-  CMAKE_STANDARD_INTRODUCTION,
-  {0,0,0}
-};
-
-//----------------------------------------------------------------------------
-static const char * cmDocumentationOptions[][3] =
-{
-  CMAKE_STANDARD_OPTIONS_TABLE,
-  {"-E", "CMake command mode.",
-   "For true platform independence, CMake provides a list of commands "
-   "that can be used on all systems. Run with -E help for the usage "
-   "information."},
-  {"-i", "Run in wizard mode.",
-   "Wizard mode runs cmake interactively without a GUI.  The user is "
-   "prompted to answer questions about the project configuration.  "
-   "The answers are used to set cmake cache values."},
-  {"-L[A][H]", "List non-advanced cached variables.",
-   "List cache variables will run CMake and list all the variables from the "
-   "CMake cache that are not marked as INTERNAL or ADVANCED. This will "
-   "effectively display current CMake settings, which can be then changed "
-   "with -D option. Changing some of the variable may result in more "
-   "variables being created. If A is specified, then it will display also "
-   "advanced variables. If H is specified, it will also display help for "
-   "each variable."},
-  {"-N", "View mode only.",
-   "Only load the cache. Do not actually run configure and generate steps."},
-  {"-P <file>", "Process script mode.",
-   "Process the given cmake file as a script written in the CMake language.  "
-   "No configure or generate step is performed and the cache is not"
-   " modified. If variables are defined using -D, this must be done "
-   "before the -P argument."},
-  {"--graphviz=[file]", "Generate graphviz of dependencies.",
-   "Generate a graphviz input file that will contain all the library and "
-   "executable dependencies in the project."},
-  {"--system-information [file]", "Dump information about this system.",
-   "Dump a wide range of information about the current system. If run "
-   "from the top of a binary tree for a CMake project it will dump "
-   "additional information such as the cache, log files etc."},
-  {"--debug-trycompile", "Do not delete the try compile directories..",
-   "Do not delete the files and directories created for try_compile calls. "
-   "This is useful in debugging failed try_compiles."},
-  {"--debug-output", "Put cmake in a debug mode.",
-   "Print extra stuff during the cmake run like stack traces with "
-   "message(send_error ) calls."},
-  {"--help-command cmd [file]", "Print help for a single command and exit.",
-   "Full documentation specific to the given command is displayed. "
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-command-list [file]", "List available listfile commands and exit.",
-   "The list contains all commands for which help may be obtained by using "
-   "the --help-command argument followed by a command name. "
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-commands [file]", "Print help for all commands and exit.",
-   "Full documentation specific for all current command is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-compatcommands [file]", "Print help for compatibility commands. ",
-   "Full documentation specific for all compatibility commands is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-module module [file]", "Print help for a single module and exit.",
-   "Full documentation specific to the given module is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-module-list [file]", "List available modules and exit.",
-   "The list contains all modules for which help may be obtained by using "
-   "the --help-module argument followed by a module name. "
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-modules [file]", "Print help for all modules and exit.",
-   "Full documentation for all modules is displayed. "
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-custom-modules [file]" , "Print help for all custom modules and "
-   "exit.",
-   "Full documentation for all custom modules is displayed. "
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-property prop [file]", 
-   "Print help for a single property and exit.",
-   "Full documentation specific to the given property is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-property-list [file]", "List available properties and exit.",
-   "The list contains all properties for which help may be obtained by using "
-   "the --help-property argument followed by a property name.  If a file is "
-   "specified, the help is written into it."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-properties [file]", "Print help for all properties and exit.",
-   "Full documentation for all properties is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-variable var [file]", 
-   "Print help for a single variable and exit.",
-   "Full documentation specific to the given variable is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-variable-list [file]", "List documented variables and exit.",
-   "The list contains all variables for which help may be obtained by using "
-   "the --help-variable argument followed by a variable name.  If a file is "
-   "specified, the help is written into it."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {"--help-variables [file]", "Print help for all variables and exit.",
-   "Full documentation for all variables is displayed."
-   "If a file is specified, the documentation is written into and the output "
-   "format is determined depending on the filename suffix. Supported are man "
-   "page, HTML and plain text."},
-  {0,0,0}
-};
-
-//----------------------------------------------------------------------------
-static const char * cmDocumentationSeeAlso[][3] =
-{
-  {0, "ccmake", 0},
-  {0, "ctest", 0},
-  {0, 0, 0}
-};
-
-//----------------------------------------------------------------------------
-static const char * cmDocumentationNOTE[][3] =
-{
-  {0,
-   "CMake no longer configures a project when run with no arguments.  "
-   "In order to configure the project in the current directory, run\n"
-   "  cmake .", 0},
-  {0,0,0}
-};
+#  include "cmDocumentation.h"
+#  include "cmDynamicLoader.h"
 #endif
 
-int do_cmake(int ac, char** av);
+#include "cm_uv.h"
 
-static cmMakefile* cmakemainGetMakefile(void *clientdata)
+#include "cmsys/Encoding.hxx"
+#if defined(_WIN32) && defined(CMAKE_BUILD_WITH_CMAKE)
+#  include "cmsys/ConsoleBuf.hxx"
+#endif
+
+#include <cassert>
+#include <climits>
+#include <ctype.h>
+#include <iostream>
+#include <string.h>
+#include <string>
+#include <vector>
+
+#ifdef CMAKE_BUILD_WITH_CMAKE
+static const char* cmDocumentationName[][2] = {
+  { nullptr, "  cmake - Cross-Platform Makefile Generator." },
+  { nullptr, nullptr }
+};
+
+static const char* cmDocumentationUsage[][2] = {
+  { nullptr,
+    "  cmake [options] <path-to-source>\n"
+    "  cmake [options] <path-to-existing-build>\n"
+    "  cmake [options] -S <path-to-source> -B <path-to-build>" },
+  { nullptr,
+    "Specify a source directory to (re-)generate a build system for "
+    "it in the current working directory.  Specify an existing build "
+    "directory to re-generate its build system." },
+  { nullptr, nullptr }
+};
+
+static const char* cmDocumentationUsageNote[][2] = {
+  { nullptr, "Run 'cmake --help' for more information." },
+  { nullptr, nullptr }
+};
+
+#  define CMAKE_BUILD_OPTIONS                                                 \
+    "  <dir>          = Project binary directory to be built.\n"              \
+    "  --parallel [<jobs>], -j [<jobs>]\n"                                    \
+    "                 = Build in parallel using the given number of jobs. \n" \
+    "                   If <jobs> is omitted the native build tool's \n"      \
+    "                   default number is used.\n"                            \
+    "                   The CMAKE_BUILD_PARALLEL_LEVEL environment "          \
+    "variable\n"                                                              \
+    "                   specifies a default parallel level when this "        \
+    "option\n"                                                                \
+    "                   is not given.\n"                                      \
+    "  --target <tgt>..., -t <tgt>... \n"                                     \
+    "                 = Build <tgt> instead of default targets.\n"            \
+    "  --config <cfg> = For multi-configuration tools, choose <cfg>.\n"       \
+    "  --clean-first  = Build target 'clean' first, then build.\n"            \
+    "                   (To clean only, use --target 'clean'.)\n"             \
+    "  --verbose, -v  = Enable verbose output - if supported - including\n"   \
+    "                   the build commands to be executed. \n"                \
+    "  --             = Pass remaining options to the native tool.\n"
+
+#  define CMAKE_INSTALL_OPTIONS                                               \
+    "  <dir>              = Project binary directory to install.\n"           \
+    "  --config <cfg>     = For multi-configuration tools, choose <cfg>.\n"   \
+    "  --component <comp> = Component-based install. Only install <comp>.\n"  \
+    "  --prefix <prefix>  = The installation prefix CMAKE_INSTALL_PREFIX.\n"  \
+    "  --strip            = Performing install/strip.\n"                      \
+    "  -v --verbose       = Enable verbose output.\n"
+
+static const char* cmDocumentationOptions[][2] = {
+  CMAKE_STANDARD_OPTIONS_TABLE,
+  { "-E", "CMake command mode." },
+  { "-L[A][H]", "List non-advanced cached variables." },
+  { "--build <dir>", "Build a CMake-generated project binary tree." },
+  { "--install <dir>", "Install a CMake-generated project binary tree." },
+  { "--open <dir>", "Open generated project in the associated application." },
+  { "-N", "View mode only." },
+  { "-P <file>", "Process script mode." },
+  { "--find-package", "Run in pkg-config like mode." },
+  { "--graphviz=[file]",
+    "Generate graphviz of dependencies, see "
+    "CMakeGraphVizOptions.cmake for more." },
+  { "--system-information [file]", "Dump information about this system." },
+  { "--loglevel=<error|warn|notice|status|verbose|debug|trace>",
+    "Set the verbosity of messages from CMake files." },
+  { "--debug-trycompile",
+    "Do not delete the try_compile build tree. Only "
+    "useful on one try_compile at a time." },
+  { "--debug-output", "Put cmake in a debug mode." },
+  { "--trace", "Put cmake in trace mode." },
+  { "--trace-expand", "Put cmake in trace mode with variable expansion." },
+  { "--trace-source=<file>",
+    "Trace only this CMake file/module. Multiple options allowed." },
+  { "--warn-uninitialized", "Warn about uninitialized values." },
+  { "--warn-unused-vars", "Warn about unused variables." },
+  { "--no-warn-unused-cli", "Don't warn about command line options." },
+  { "--check-system-vars",
+    "Find problems with variable usage in system "
+    "files." },
+  { nullptr, nullptr }
+};
+
+#endif
+
+static int do_command(int ac, char const* const* av)
 {
-  cmake* cm = (cmake *)clientdata;
-  if(cm && cm->GetDebugOutput())
-    {
-    cmGlobalGenerator* gg=cm->GetGlobalGenerator();
-    if (gg)
-      {
-      cmLocalGenerator* lg=gg->GetCurrentLocalGenerator();
-      if (lg)
-        {
-        cmMakefile* mf = lg->GetMakefile();
-        return mf;
-        }
-      }
-    }
-  return 0;
+  std::vector<std::string> args;
+  args.reserve(ac - 1);
+  args.emplace_back(av[0]);
+  args.insert(args.end(), av + 2, av + ac);
+  return cmcmd::ExecuteCMakeCommand(args);
 }
 
-static std::string cmakemainGetStack(void *clientdata)
+int do_cmake(int ac, char const* const* av);
+static int do_build(int ac, char const* const* av);
+static int do_install(int ac, char const* const* av);
+static int do_open(int ac, char const* const* av);
+
+static cmMakefile* cmakemainGetMakefile(cmake* cm)
+{
+  if (cm && cm->GetDebugOutput()) {
+    cmGlobalGenerator* gg = cm->GetGlobalGenerator();
+    if (gg) {
+      return gg->GetCurrentMakefile();
+    }
+  }
+  return nullptr;
+}
+
+static std::string cmakemainGetStack(cmake* cm)
 {
   std::string msg;
-  cmMakefile* mf=cmakemainGetMakefile(clientdata);
-  if (mf)
-    {
-    msg = mf->GetListFileStack();
-    if (!msg.empty())
-      {
+  cmMakefile* mf = cmakemainGetMakefile(cm);
+  if (mf) {
+    msg = mf->FormatListFileStack();
+    if (!msg.empty()) {
       msg = "\n   Called from: " + msg;
-      }
     }
+  }
 
   return msg;
 }
 
-static void cmakemainErrorCallback(const char* m, const char*, bool&, 
-                                   void *clientdata)
+static void cmakemainMessageCallback(const std::string& m,
+                                     const char* /*unused*/, cmake* cm)
 {
-  std::cerr << m << cmakemainGetStack(clientdata) << std::endl << std::flush;
+  std::cerr << m << cmakemainGetStack(cm) << std::endl << std::flush;
 }
 
-static void cmakemainProgressCallback(const char *m, float prog, 
-                                      void* clientdata)
+static void cmakemainProgressCallback(const std::string& m, float prog,
+                                      cmake* cm)
 {
-  cmMakefile* mf = cmakemainGetMakefile(clientdata);
+  cmMakefile* mf = cmakemainGetMakefile(cm);
   std::string dir;
-  if ((mf) && (strstr(m, "Configuring")==m) && (prog<0))
-    {
+  if (mf && cmHasLiteralPrefix(m, "Configuring") && (prog < 0)) {
     dir = " ";
-    dir += mf->GetCurrentDirectory();
-    }
-  else if ((mf) && (strstr(m, "Generating")==m))
-    {
+    dir += mf->GetCurrentSourceDirectory();
+  } else if (mf && cmHasLiteralPrefix(m, "Generating")) {
     dir = " ";
-    dir += mf->GetCurrentOutputDirectory();
-    }
+    dir += mf->GetCurrentBinaryDirectory();
+  }
 
-  if ((prog < 0) || (!dir.empty()))
-    {
-    std::cout << "-- " << m << dir << cmakemainGetStack(clientdata)<<std::endl;
-    }
+  if ((prog < 0) || (!dir.empty())) {
+    std::cout << "-- " << m << dir << cmakemainGetStack(cm) << std::endl;
+  }
 
   std::cout.flush();
 }
 
-
-int main(int ac, char** av)
+int main(int ac, char const* const* av)
 {
+  cmSystemTools::EnsureStdPipes();
+#if defined(_WIN32) && defined(CMAKE_BUILD_WITH_CMAKE)
+  // Replace streambuf so we can output Unicode to console
+  cmsys::ConsoleBuf::Manager consoleOut(std::cout);
+  consoleOut.SetUTF8Pipes();
+  cmsys::ConsoleBuf::Manager consoleErr(std::cerr, true);
+  consoleErr.SetUTF8Pipes();
+#endif
+  cmsys::Encoding::CommandLineArguments args =
+    cmsys::Encoding::CommandLineArguments::Main(ac, av);
+  ac = args.argc();
+  av = args.argv();
+
   cmSystemTools::EnableMSVCDebugHook();
-  cmSystemTools::FindExecutableDirectory(av[0]);
+  cmSystemTools::InitializeLibUV();
+  cmSystemTools::FindCMakeResources(av[0]);
+  if (ac > 1) {
+    if (strcmp(av[1], "--build") == 0) {
+      return do_build(ac, av);
+    }
+    if (strcmp(av[1], "--install") == 0) {
+      return do_install(ac, av);
+    }
+    if (strcmp(av[1], "--open") == 0) {
+      return do_open(ac, av);
+    }
+    if (strcmp(av[1], "-E") == 0) {
+      return do_command(ac, av);
+    }
+  }
   int ret = do_cmake(ac, av);
 #ifdef CMAKE_BUILD_WITH_CMAKE
   cmDynamicLoader::FlushCache();
 #endif
+  uv_loop_close(uv_default_loop());
   return ret;
 }
 
-int do_cmake(int ac, char** av)
+int do_cmake(int ac, char const* const* av)
 {
+  if (cmSystemTools::GetCurrentWorkingDirectory().empty()) {
+    std::cerr << "Current working directory cannot be established."
+              << std::endl;
+    return 1;
+  }
+
 #ifdef CMAKE_BUILD_WITH_CMAKE
   cmDocumentation doc;
-#endif
-  int nocwd = 0;
-
-  if ( cmSystemTools::GetCurrentWorkingDirectory().size() == 0 )
-    {
-    std::cerr << "Current working directory cannot be established." 
-              << std::endl;
-    nocwd = 1;
-    }
-
-#ifdef CMAKE_BUILD_WITH_CMAKE
-  if(doc.CheckOptions(ac, av) || nocwd)
-    { 
+  doc.addCMakeStandardDocSections();
+  if (doc.CheckOptions(ac, av)) {
     // Construct and print requested documentation.
-    cmake hcm;
+    cmake hcm(cmake::RoleInternal, cmState::Unknown);
+    hcm.SetHomeDirectory("");
+    hcm.SetHomeOutputDirectory("");
     hcm.AddCMakePaths();
-    doc.SetCMakeRoot(hcm.GetCacheDefinition("CMAKE_ROOT"));
 
-    // the command line args are processed here so that you can do 
+    // the command line args are processed here so that you can do
     // -DCMAKE_MODULE_PATH=/some/path and have this value accessible here
-    std::vector<std::string> args;
-    for(int i =0; i < ac; ++i)
-      {
-      args.push_back(av[i]);
-      }
+    std::vector<std::string> args(av, av + ac);
     hcm.SetCacheArgs(args);
-    const char* modulePath = hcm.GetCacheDefinition("CMAKE_MODULE_PATH");
-    if (modulePath)
-      {
-      doc.SetCMakeModulePath(modulePath);
-      }
 
-    std::vector<cmDocumentationEntry> commands;
-    std::vector<cmDocumentationEntry> compatCommands;
-    std::vector<cmDocumentationEntry> generators;
-    std::map<std::string,cmDocumentationSection *> propDocs;
-
-    hcm.GetCommandDocumentation(commands, true, false);
-    hcm.GetCommandDocumentation(compatCommands, false, true);
-    hcm.GetPropertiesDocumentation(propDocs);
-    hcm.GetGeneratorDocumentation(generators);
+    auto generators = hcm.GetGeneratorsDocumentation();
 
     doc.SetName("cmake");
-    doc.SetSection("Name",cmDocumentationName);
-    doc.SetSection("Usage",cmDocumentationUsage);
-    doc.SetSection("Description",cmDocumentationDescription);
-    doc.AppendSection("Generators",generators);
-    doc.PrependSection("Options",cmDocumentationOptions);
-    doc.SetSection("Commands",commands);
-    doc.AppendSection("Compatibility Commands",compatCommands);
-    doc.SetSections(propDocs);
-
-    cmDocumentationEntry e;
-    e.Brief = 
-      "variables defined by cmake, that give information about the project, "
-      "and cmake";
-    doc.PrependSection("Variables that Provide Information",e);
-
-    doc.SetSeeAlsoList(cmDocumentationSeeAlso);
-    int result = doc.PrintRequestedDocumentation(std::cout)? 0:1;
-
-    // If we were run with no arguments, but a CMakeLists.txt file
-    // exists, the user may have been trying to use the old behavior
-    // of cmake to build a project in-source.  Print a message
-    // explaining the change to standard error and return an error
-    // condition in case the program is running from a script.
-    if((ac == 1) && cmSystemTools::FileExists("CMakeLists.txt"))
-      {
-      doc.ClearSections();
-      doc.SetSection("NOTE", cmDocumentationNOTE);
-      doc.Print(cmDocumentation::UsageForm, std::cerr);
-      return 1;
-      }
-    return result;
+    doc.SetSection("Name", cmDocumentationName);
+    doc.SetSection("Usage", cmDocumentationUsage);
+    if (ac == 1) {
+      doc.AppendSection("Usage", cmDocumentationUsageNote);
     }
+    doc.AppendSection("Generators", generators);
+    doc.PrependSection("Options", cmDocumentationOptions);
+
+    return doc.PrintRequestedDocumentation(std::cout) ? 0 : 1;
+  }
 #else
-  if ( nocwd || ac == 1 )
-    {
-    std::cout << 
-      "Bootstrap CMake should not be used outside CMake build process."
-              << std::endl;
+  if (ac == 1) {
+    std::cout
+      << "Bootstrap CMake should not be used outside CMake build process."
+      << std::endl;
     return 0;
-    }
+  }
 #endif
-  
-  bool wiz = false;
+
   bool sysinfo = false;
-  bool command = false;
   bool list_cached = false;
   bool list_all_cached = false;
   bool list_help = false;
   bool view_only = false;
-  bool script_mode = false;
+  cmake::WorkingMode workingMode = cmake::NORMAL_MODE;
   std::vector<std::string> args;
-  for(int i =0; i < ac; ++i)
-    {
-    if(strcmp(av[i], "-i") == 0)
-      {
-      wiz = true;
-      }
-    else if(!command && strcmp(av[i], "--system-information") == 0)
-      {
+  for (int i = 0; i < ac; ++i) {
+    if (strcmp(av[i], "-i") == 0) {
+      /* clang-format off */
+      std::cerr <<
+        "The \"cmake -i\" wizard mode is no longer supported.\n"
+        "Use the -D option to set cache values on the command line.\n"
+        "Use cmake-gui or ccmake for an interactive dialog.\n";
+      /* clang-format on */
+      return 1;
+    }
+    if (strcmp(av[i], "--system-information") == 0) {
       sysinfo = true;
-      }
-    // if command has already been set, then
-    // do not eat the -E 
-    else if (!command && strcmp(av[i], "-E") == 0)
-      {
-      command = true;
-      }
-    else if (strcmp(av[i], "-N") == 0)
-      {
+    } else if (strcmp(av[i], "-N") == 0) {
       view_only = true;
-      }
-    else if (strcmp(av[i], "-L") == 0)
-      {
+    } else if (strcmp(av[i], "-L") == 0) {
       list_cached = true;
-      }
-    else if (strcmp(av[i], "-LA") == 0)
-      {
+    } else if (strcmp(av[i], "-LA") == 0) {
       list_all_cached = true;
-      }
-    else if (strcmp(av[i], "-LH") == 0)
-      {
+    } else if (strcmp(av[i], "-LH") == 0) {
       list_cached = true;
       list_help = true;
-      }
-    else if (strcmp(av[i], "-LAH") == 0)
-      {
+    } else if (strcmp(av[i], "-LAH") == 0) {
       list_all_cached = true;
       list_help = true;
-      }
-    else if (strncmp(av[i], "-P", strlen("-P")) == 0)
-      {
-      if ( i == ac -1 )
-        {
+    } else if (cmHasLiteralPrefix(av[i], "-P")) {
+      if (i == ac - 1) {
         cmSystemTools::Error("No script specified for argument -P");
-        }
-      else
-        {
-        script_mode = true;
-        args.push_back(av[i]);
-        i++;
-        args.push_back(av[i]);
-        }
+        return 1;
       }
-    else 
-      {
-      args.push_back(av[i]);
-      }
+      workingMode = cmake::SCRIPT_MODE;
+      args.emplace_back(av[i]);
+      i++;
+      args.emplace_back(av[i]);
+    } else if (cmHasLiteralPrefix(av[i], "--find-package")) {
+      workingMode = cmake::FIND_PACKAGE_MODE;
+      args.emplace_back(av[i]);
+    } else {
+      args.emplace_back(av[i]);
     }
-
-  if(command)
-    {
-    int ret = cmake::ExecuteCMakeCommand(args);
-    return ret;
-    }
-  if (wiz)
-    {
-    cmakewizard wizard;
-    return wizard.RunWizard(args); 
-    }
-  if (sysinfo)
-    {
-    cmake cm;
+  }
+  if (sysinfo) {
+    cmake cm(cmake::RoleProject, cmState::Project);
+    cm.SetHomeDirectory("");
+    cm.SetHomeOutputDirectory("");
     int ret = cm.GetSystemInformation(args);
-    return ret; 
-    }
-  cmake cm;  
-  cmSystemTools::SetErrorCallback(cmakemainErrorCallback, (void *)&cm);
-  cm.SetProgressCallback(cmakemainProgressCallback, (void *)&cm);
-  cm.SetScriptMode(script_mode);
+    return ret;
+  }
+  cmake::Role const role =
+    workingMode == cmake::SCRIPT_MODE ? cmake::RoleScript : cmake::RoleProject;
+  cmState::Mode mode = cmState::Unknown;
+  switch (workingMode) {
+    case cmake::NORMAL_MODE:
+      mode = cmState::Project;
+      break;
+    case cmake::SCRIPT_MODE:
+      mode = cmState::Script;
+      break;
+    case cmake::FIND_PACKAGE_MODE:
+      mode = cmState::FindPackage;
+      break;
+  }
+  cmake cm(role, mode);
+  cm.SetHomeDirectory("");
+  cm.SetHomeOutputDirectory("");
+  cmSystemTools::SetMessageCallback(
+    [&cm](const std::string& msg, const char* title) {
+      cmakemainMessageCallback(msg, title, &cm);
+    });
+  cm.SetProgressCallback([&cm](const std::string& msg, float prog) {
+    cmakemainProgressCallback(msg, prog, &cm);
+  });
+  cm.SetWorkingMode(workingMode);
 
   int res = cm.Run(args, view_only);
-  if ( list_cached || list_all_cached )
-    {
-    cmCacheManager::CacheIterator it = 
-      cm.GetCacheManager()->GetCacheIterator();
+  if (list_cached || list_all_cached) {
     std::cout << "-- Cache values" << std::endl;
-    for ( it.Begin(); !it.IsAtEnd(); it.Next() )
-      {
-      cmCacheManager::CacheEntryType t = it.GetType();
-      if ( t != cmCacheManager::INTERNAL && t != cmCacheManager::STATIC &&
-        t != cmCacheManager::UNINITIALIZED )
-        {
-        bool advanced = it.PropertyExists("ADVANCED");
-        if ( list_all_cached || !advanced)
-          {
-          if ( list_help )
-            {
-            std::cout << "// " << it.GetProperty("HELPSTRING") << std::endl;
-            }
-          std::cout << it.GetName() << ":" << 
-            cmCacheManager::TypeToString(it.GetType()) 
-            << "=" << it.GetValue() << std::endl;
-          if ( list_help )
-            {
+    std::vector<std::string> keys = cm.GetState()->GetCacheEntryKeys();
+    for (std::string const& k : keys) {
+      cmStateEnums::CacheEntryType t = cm.GetState()->GetCacheEntryType(k);
+      if (t != cmStateEnums::INTERNAL && t != cmStateEnums::STATIC &&
+          t != cmStateEnums::UNINITIALIZED) {
+        const char* advancedProp =
+          cm.GetState()->GetCacheEntryProperty(k, "ADVANCED");
+        if (list_all_cached || !advancedProp) {
+          if (list_help) {
+            std::cout << "// "
+                      << cm.GetState()->GetCacheEntryProperty(k, "HELPSTRING")
+                      << std::endl;
+          }
+          std::cout << k << ":" << cmState::CacheEntryTypeToString(t) << "="
+                    << cm.GetState()->GetCacheEntryValue(k) << std::endl;
+          if (list_help) {
             std::cout << std::endl;
-            }
           }
         }
       }
     }
+  }
 
   // Always return a non-negative value.  Windows tools do not always
   // interpret negative return values as errors.
-  if(res != 0)
-    {
+  if (res != 0) {
     return 1;
-    }
-  else
-    {
-    return 0;
-    }
+  }
+  return 0;
 }
 
+namespace {
+int extract_job_number(int& index, char const* current, char const* next,
+                       int len_of_flag)
+{
+  std::string command(current);
+  std::string jobString = command.substr(len_of_flag);
+  if (jobString.empty() && next && isdigit(next[0])) {
+    ++index; // skip parsing the job number
+    jobString = std::string(next);
+  }
+
+  int jobs = -1;
+  unsigned long numJobs = 0;
+  if (jobString.empty()) {
+    jobs = cmake::DEFAULT_BUILD_PARALLEL_LEVEL;
+  } else if (cmSystemTools::StringToULong(jobString.c_str(), &numJobs)) {
+    if (numJobs == 0) {
+      std::cerr
+        << "The <jobs> value requires a positive integer argument.\n\n";
+    } else if (numJobs > INT_MAX) {
+      std::cerr << "The <jobs> value is too large.\n\n";
+    } else {
+      jobs = int(numJobs);
+    }
+  } else {
+    std::cerr << "'" << command.substr(0, len_of_flag) << "' invalid number '"
+              << jobString << "' given.\n\n";
+  }
+  return jobs;
+}
+}
+
+static int do_build(int ac, char const* const* av)
+{
+#ifndef CMAKE_BUILD_WITH_CMAKE
+  std::cerr << "This cmake does not support --build\n";
+  return -1;
+#else
+  int jobs = cmake::NO_BUILD_PARALLEL_LEVEL;
+  std::vector<std::string> targets;
+  std::string config = "Debug";
+  std::string dir;
+  std::vector<std::string> nativeOptions;
+  bool cleanFirst = false;
+  bool foundClean = false;
+  bool foundNonClean = false;
+  bool verbose = cmSystemTools::HasEnv("VERBOSE");
+
+  enum Doing
+  {
+    DoingNone,
+    DoingDir,
+    DoingTarget,
+    DoingConfig,
+    DoingNative
+  };
+  Doing doing = DoingDir;
+  for (int i = 2; i < ac; ++i) {
+    if (doing == DoingNative) {
+      nativeOptions.emplace_back(av[i]);
+    } else if (cmHasLiteralPrefix(av[i], "-j")) {
+      const char* nextArg = ((i + 1 < ac) ? av[i + 1] : nullptr);
+      jobs = extract_job_number(i, av[i], nextArg, sizeof("-j") - 1);
+      if (jobs < 0) {
+        dir.clear();
+      }
+      doing = DoingNone;
+    } else if (cmHasLiteralPrefix(av[i], "--parallel")) {
+      const char* nextArg = ((i + 1 < ac) ? av[i + 1] : nullptr);
+      jobs = extract_job_number(i, av[i], nextArg, sizeof("--parallel") - 1);
+      if (jobs < 0) {
+        dir.clear();
+      }
+      doing = DoingNone;
+    } else if ((strcmp(av[i], "--target") == 0) ||
+               (strcmp(av[i], "-t") == 0)) {
+      doing = DoingTarget;
+    } else if (strcmp(av[i], "--config") == 0) {
+      doing = DoingConfig;
+    } else if (strcmp(av[i], "--clean-first") == 0) {
+      cleanFirst = true;
+      doing = DoingNone;
+    } else if ((strcmp(av[i], "--verbose") == 0) ||
+               (strcmp(av[i], "-v") == 0)) {
+      verbose = true;
+      doing = DoingNone;
+    } else if (strcmp(av[i], "--use-stderr") == 0) {
+      /* tolerate legacy option */
+    } else if (strcmp(av[i], "--") == 0) {
+      doing = DoingNative;
+    } else {
+      switch (doing) {
+        case DoingDir:
+          dir = cmSystemTools::CollapseFullPath(av[i]);
+          doing = DoingNone;
+          break;
+        case DoingTarget:
+          if (strlen(av[i]) == 0) {
+            std::cerr << "Warning: Argument number " << i
+                      << " after --target option is empty." << std::endl;
+          } else {
+            targets.emplace_back(av[i]);
+            if (strcmp(av[i], "clean") == 0) {
+              foundClean = true;
+            } else {
+              foundNonClean = true;
+            }
+          }
+          if (foundClean && foundNonClean) {
+            std::cerr << "Error: Building 'clean' and other targets together "
+                         "is not supported."
+                      << std::endl;
+            dir.clear();
+          }
+          break;
+        case DoingConfig:
+          config = av[i];
+          doing = DoingNone;
+          break;
+        default:
+          std::cerr << "Unknown argument " << av[i] << std::endl;
+          dir.clear();
+          break;
+      }
+    }
+  }
+
+  if (jobs == cmake::NO_BUILD_PARALLEL_LEVEL) {
+    std::string parallel;
+    if (cmSystemTools::GetEnv("CMAKE_BUILD_PARALLEL_LEVEL", parallel)) {
+      if (parallel.empty()) {
+        jobs = cmake::DEFAULT_BUILD_PARALLEL_LEVEL;
+      } else {
+        unsigned long numJobs = 0;
+        if (cmSystemTools::StringToULong(parallel.c_str(), &numJobs)) {
+          if (numJobs == 0) {
+            std::cerr << "The CMAKE_BUILD_PARALLEL_LEVEL environment variable "
+                         "requires a positive integer argument.\n\n";
+            dir.clear();
+          } else if (numJobs > INT_MAX) {
+            std::cerr << "The CMAKE_BUILD_PARALLEL_LEVEL environment variable "
+                         "is too large.\n\n";
+            dir.clear();
+          } else {
+            jobs = int(numJobs);
+          }
+        } else {
+          std::cerr << "'CMAKE_BUILD_PARALLEL_LEVEL' environment variable\n"
+                    << "invalid number '" << parallel << "' given.\n\n";
+          dir.clear();
+        }
+      }
+    }
+  }
+
+  if (dir.empty()) {
+    /* clang-format off */
+    std::cerr <<
+      "Usage: cmake --build <dir> [options] [-- [native-options]]\n"
+      "Options:\n"
+      CMAKE_BUILD_OPTIONS
+      ;
+    /* clang-format on */
+    return 1;
+  }
+
+  cmake cm(cmake::RoleInternal, cmState::Project);
+  cmSystemTools::SetMessageCallback(
+    [&cm](const std::string& msg, const char* title) {
+      cmakemainMessageCallback(msg, title, &cm);
+    });
+  cm.SetProgressCallback([&cm](const std::string& msg, float prog) {
+    cmakemainProgressCallback(msg, prog, &cm);
+  });
+  return cm.Build(jobs, dir, targets, config, nativeOptions, cleanFirst,
+                  verbose);
+#endif
+}
+
+static int do_install(int ac, char const* const* av)
+{
+#ifndef CMAKE_BUILD_WITH_CMAKE
+  std::cerr << "This cmake does not support --install\n";
+  return -1;
+#else
+  assert(1 < ac);
+
+  std::string config;
+  std::string component;
+  std::string prefix;
+  std::string dir;
+  bool strip = false;
+  bool verbose = cmSystemTools::HasEnv("VERBOSE");
+
+  enum Doing
+  {
+    DoingNone,
+    DoingDir,
+    DoingConfig,
+    DoingComponent,
+    DoingPrefix,
+  };
+
+  Doing doing = DoingDir;
+
+  for (int i = 2; i < ac; ++i) {
+    if (strcmp(av[i], "--config") == 0) {
+      doing = DoingConfig;
+    } else if (strcmp(av[i], "--component") == 0) {
+      doing = DoingComponent;
+    } else if (strcmp(av[i], "--prefix") == 0) {
+      doing = DoingPrefix;
+    } else if (strcmp(av[i], "--strip") == 0) {
+      strip = true;
+      doing = DoingNone;
+    } else if ((strcmp(av[i], "--verbose") == 0) ||
+               (strcmp(av[i], "-v") == 0)) {
+      verbose = true;
+      doing = DoingNone;
+    } else {
+      switch (doing) {
+        case DoingDir:
+          dir = cmSystemTools::CollapseFullPath(av[i]);
+          doing = DoingNone;
+          break;
+        case DoingConfig:
+          config = av[i];
+          doing = DoingNone;
+          break;
+        case DoingComponent:
+          component = av[i];
+          doing = DoingNone;
+          break;
+        case DoingPrefix:
+          prefix = av[i];
+          doing = DoingNone;
+          break;
+        default:
+          std::cerr << "Unknown argument " << av[i] << std::endl;
+          dir.clear();
+          break;
+      }
+    }
+  }
+
+  if (dir.empty()) {
+    std::cerr << "Usage: cmake --install <dir> "
+                 "[options]\nOptions:\n" CMAKE_INSTALL_OPTIONS;
+    return 1;
+  }
+
+  cmake cm(cmake::RoleScript, cmState::Script);
+
+  cmSystemTools::SetMessageCallback(
+    [&cm](const std::string& msg, const char* title) {
+      cmakemainMessageCallback(msg, title, &cm);
+    });
+  cm.SetProgressCallback([&cm](const std::string& msg, float prog) {
+    cmakemainProgressCallback(msg, prog, &cm);
+  });
+  cm.SetHomeDirectory("");
+  cm.SetHomeOutputDirectory("");
+  cm.SetDebugOutputOn(verbose);
+  cm.SetWorkingMode(cmake::SCRIPT_MODE);
+
+  std::vector<std::string> args{ av[0] };
+
+  if (!prefix.empty()) {
+    args.emplace_back("-DCMAKE_INSTALL_PREFIX=" + prefix);
+  }
+
+  if (!component.empty()) {
+    args.emplace_back("-DCMAKE_INSTALL_COMPONENT=" + component);
+  }
+
+  if (strip) {
+    args.emplace_back("-DCMAKE_INSTALL_DO_STRIP=1");
+  }
+
+  if (!config.empty()) {
+    args.emplace_back("-DCMAKE_INSTALL_CONFIG_NAME=" + config);
+  }
+
+  args.emplace_back("-P");
+  args.emplace_back(dir + "/cmake_install.cmake");
+
+  return cm.Run(args) ? 1 : 0;
+#endif
+}
+
+static int do_open(int ac, char const* const* av)
+{
+#ifndef CMAKE_BUILD_WITH_CMAKE
+  std::cerr << "This cmake does not support --open\n";
+  return -1;
+#else
+  std::string dir;
+
+  enum Doing
+  {
+    DoingNone,
+    DoingDir,
+  };
+  Doing doing = DoingDir;
+  for (int i = 2; i < ac; ++i) {
+    switch (doing) {
+      case DoingDir:
+        dir = cmSystemTools::CollapseFullPath(av[i]);
+        doing = DoingNone;
+        break;
+      default:
+        std::cerr << "Unknown argument " << av[i] << std::endl;
+        dir.clear();
+        break;
+    }
+  }
+  if (dir.empty()) {
+    std::cerr << "Usage: cmake --open <dir>\n";
+    return 1;
+  }
+
+  cmake cm(cmake::RoleInternal, cmState::Unknown);
+  cmSystemTools::SetMessageCallback(
+    [&cm](const std::string& msg, const char* title) {
+      cmakemainMessageCallback(msg, title, &cm);
+    });
+  cm.SetProgressCallback([&cm](const std::string& msg, float prog) {
+    cmakemainProgressCallback(msg, prog, &cm);
+  });
+  return cm.Open(dir, false) ? 0 : 1;
+#endif
+}

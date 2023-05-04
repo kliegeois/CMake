@@ -1,72 +1,106 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmDefinePropertyCommand.h"
-#include "cmake.h"
 
-// cmDefinePropertiesCommand
-bool cmDefinePropertyCommand::InitialPass(
-  std::vector<std::string> const& args)
+#include <sstream>
+
+#include "cmMakefile.h"
+#include "cmProperty.h"
+#include "cmState.h"
+
+class cmExecutionStatus;
+
+bool cmDefinePropertyCommand::InitialPass(std::vector<std::string> const& args,
+                                          cmExecutionStatus&)
 {
-  if(args.size() < 5 )
-    {
+  if (args.empty()) {
     this->SetError("called with incorrect number of arguments");
     return false;
-    }
+  }
 
-  // determine the scope
+  // Get the scope in which to define the property.
   cmProperty::ScopeType scope;
-  if (args[1] == "GLOBAL")
-    {
-    scope = cmProperty::GLOBAL;
-    }
-  else if (args[1] == "DIRECTORY")
-    {
-    scope = cmProperty::DIRECTORY;
-    }
-  else if (args[1] == "TARGET")
-    {
-    scope = cmProperty::TARGET;
-    }
-  else if (args[1] == "SOURCE_FILE")
-    {
-    scope = cmProperty::SOURCE_FILE;
-    }
-  else if (args[1] == "TEST")
-    {
-    scope = cmProperty::TEST;
-    }
-  else if (args[1] == "VARIABLE")
-    {
-    scope = cmProperty::VARIABLE;
-    }
-  else if (args[1] == "CACHED_VARIABLE")
-    {
-    scope = cmProperty::CACHED_VARIABLE;
-    }
-  else
-    {
-    this->SetError("called with illegal arguments.");
-    return false;
-    }
+  std::string const& scope_arg = args[0];
 
-  this->Makefile->GetCMakeInstance()->DefineProperty
-    (args[0].c_str(), scope,args[2].c_str(), args[3].c_str(),
-     cmSystemTools::IsOn(args[4].c_str()));
-  
+  if (scope_arg == "GLOBAL") {
+    scope = cmProperty::GLOBAL;
+  } else if (scope_arg == "DIRECTORY") {
+    scope = cmProperty::DIRECTORY;
+  } else if (scope_arg == "TARGET") {
+    scope = cmProperty::TARGET;
+  } else if (scope_arg == "SOURCE") {
+    scope = cmProperty::SOURCE_FILE;
+  } else if (scope_arg == "TEST") {
+    scope = cmProperty::TEST;
+  } else if (scope_arg == "VARIABLE") {
+    scope = cmProperty::VARIABLE;
+  } else if (scope_arg == "CACHED_VARIABLE") {
+    scope = cmProperty::CACHED_VARIABLE;
+  } else {
+    std::ostringstream e;
+    e << "given invalid scope " << scope_arg << ".  "
+      << "Valid scopes are "
+      << "GLOBAL, DIRECTORY, TARGET, SOURCE, "
+      << "TEST, VARIABLE, CACHED_VARIABLE.";
+    this->SetError(e.str());
+    return false;
+  }
+
+  // Parse remaining arguments.
+  bool inherited = false;
+  enum Doing
+  {
+    DoingNone,
+    DoingProperty,
+    DoingBrief,
+    DoingFull
+  };
+  Doing doing = DoingNone;
+  for (unsigned int i = 1; i < args.size(); ++i) {
+    if (args[i] == "PROPERTY") {
+      doing = DoingProperty;
+    } else if (args[i] == "BRIEF_DOCS") {
+      doing = DoingBrief;
+    } else if (args[i] == "FULL_DOCS") {
+      doing = DoingFull;
+    } else if (args[i] == "INHERITED") {
+      doing = DoingNone;
+      inherited = true;
+    } else if (doing == DoingProperty) {
+      doing = DoingNone;
+      this->PropertyName = args[i];
+    } else if (doing == DoingBrief) {
+      this->BriefDocs += args[i];
+    } else if (doing == DoingFull) {
+      this->FullDocs += args[i];
+    } else {
+      std::ostringstream e;
+      e << "given invalid argument \"" << args[i] << "\".";
+      this->SetError(e.str());
+      return false;
+    }
+  }
+
+  // Make sure a property name was found.
+  if (this->PropertyName.empty()) {
+    this->SetError("not given a PROPERTY <name> argument.");
+    return false;
+  }
+
+  // Make sure documentation was given.
+  if (this->BriefDocs.empty()) {
+    this->SetError("not given a BRIEF_DOCS <brief-doc> argument.");
+    return false;
+  }
+  if (this->FullDocs.empty()) {
+    this->SetError("not given a FULL_DOCS <full-doc> argument.");
+    return false;
+  }
+
+  // Actually define the property.
+  this->Makefile->GetState()->DefineProperty(
+    this->PropertyName, scope, this->BriefDocs.c_str(), this->FullDocs.c_str(),
+    inherited);
+
   return true;
 }
-

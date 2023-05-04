@@ -1,79 +1,57 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmGetPropertyCommand_h
 #define cmGetPropertyCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
+
+class cmExecutionStatus;
 
 class cmGetPropertyCommand : public cmCommand
 {
 public:
-  virtual cmCommand* Clone() 
-    {
-      return new cmGetPropertyCommand;
-    }
+  cmGetPropertyCommand();
+
+  cmCommand* Clone() override { return new cmGetPropertyCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the input file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
-  /**
-   * This determines if the command is invoked when in script mode.
-   */
-  virtual bool IsScriptable() { return true; }
+private:
+  enum OutType
+  {
+    OutValue,
+    OutDefined,
+    OutBriefDoc,
+    OutFullDoc,
+    OutSet
+  };
+  std::string Variable;
+  std::string Name;
+  std::string PropertyName;
+  OutType InfoType;
 
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "get_property";}
+  // Implementation of result storage.
+  bool StoreResult(const char* value);
 
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Get a property.";
-    }
-  
-  /**
-   * Longer documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-      return
-        "  get_property(VAR scope_value property)\n"
-        "  get_property(VAR scope_value property \n"
-        "               BRIEF_DOCS)\n"
-        "  get_property(VAR scope_value property \n"
-        "               FULL_DOCS)\n"
-        "Get a property from cmake.  The scope_value is either GLOBAL, "
-        "DIRECTORY dir_name, TARGET tgt_name, SOURCE_FILE src_name, "
-        "TEST test_name or VARIABLE var_name. The resulting value is "
-        "stored in the variable VAR. If the property is not found, "
-        "CMake will report an error. The second and third signatures "
-        "return the documentation for a property or variable instead of "
-        "its value.";
-    }
-  
-  cmTypeMacro(cmGetPropertyCommand, cmCommand);
+  // Implementation of each property type.
+  bool HandleGlobalMode();
+  bool HandleDirectoryMode();
+  bool HandleTargetMode();
+  bool HandleSourceMode();
+  bool HandleTestMode();
+  bool HandleVariableMode();
+  bool HandleCacheMode();
+  bool HandleInstallMode();
 };
-
-
 
 #endif

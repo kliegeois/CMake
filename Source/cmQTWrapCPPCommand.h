@@ -1,78 +1,37 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #ifndef cmQTWrapCPPCommand_h
 #define cmQTWrapCPPCommand_h
 
+#include "cmConfigure.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
+
 #include "cmCommand.h"
 
-#include "cmSourceFile.h"
+class cmExecutionStatus;
 
 /** \class cmQTWrapCPPCommand
- * \brief Create moc file rules for QT classes
+ * \brief Create moc file rules for Qt classes
  *
- * cmQTWrapCPPCommand is used to create wrappers for QT classes into
+ * cmQTWrapCPPCommand is used to create wrappers for Qt classes into
  * normal C++
  */
 class cmQTWrapCPPCommand : public cmCommand
 {
 public:
-  cmTypeMacro(cmQTWrapCPPCommand, cmCommand);
-
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone() 
-    {
-    return new cmQTWrapCPPCommand;
-    }
+  cmCommand* Clone() override { return new cmQTWrapCPPCommand; }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "qt_wrap_cpp";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Create Qt Wrappers.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  qt_wrap_cpp(resultingLibraryName DestName\n"
-      "              SourceLists ...)\n"
-      "Produce moc files for all the .h files listed in the SourceLists.  "
-      "The moc files will be added to the library using the DestName "
-      "source list.";
-    }
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 };
-
-
 
 #endif
