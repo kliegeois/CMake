@@ -1,81 +1,61 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmBuildNameCommand.h"
 
-#include <cmsys/RegularExpression.hxx>
+#include <algorithm>
 
-// cmBuildNameCommand
-bool cmBuildNameCommand::InitialPass(std::vector<std::string> const& args)
+#include "cmsys/RegularExpression.hxx"
+
+#include "cmExecutionStatus.h"
+#include "cmMakefile.h"
+#include "cmStateTypes.h"
+#include "cmSystemTools.h"
+#include "cmValue.h"
+
+bool cmBuildNameCommand(std::vector<std::string> const& args,
+                        cmExecutionStatus& status)
 {
-  if(args.size() < 1 )
-    {
-    this->SetError("called with incorrect number of arguments");
+  if (args.empty()) {
+    status.SetError("called with incorrect number of arguments");
     return false;
-    }
-  const char* cacheValue = this->Makefile->GetDefinition(args[0].c_str());
-  if(cacheValue)
-    {
-    // do we need to correct the value? 
+  }
+  cmMakefile& mf = status.GetMakefile();
+  cmValue cacheValue = mf.GetDefinition(args[0]);
+  if (cacheValue) {
+    // do we need to correct the value?
     cmsys::RegularExpression reg("[()/]");
-    if (reg.find(cacheValue))
-      {
-      std::string cv = cacheValue;
-      cmSystemTools::ReplaceString(cv,"/", "_");
-      cmSystemTools::ReplaceString(cv,"(", "_");
-      cmSystemTools::ReplaceString(cv,")", "_");
-      this->Makefile->AddCacheDefinition(args[0].c_str(),
-                                     cv.c_str(),
-                                     "Name of build.",
-                                     cmCacheManager::STRING);
-      }
+    std::string cv = *cacheValue;
+    if (reg.find(cv)) {
+      std::replace(cv.begin(), cv.end(), '/', '_');
+      std::replace(cv.begin(), cv.end(), '(', '_');
+      std::replace(cv.begin(), cv.end(), ')', '_');
+      mf.AddCacheDefinition(args[0], cv, "Name of build.",
+                            cmStateEnums::STRING);
+    }
     return true;
-    }
+  }
 
-  
   std::string buildname = "WinNT";
-  if(this->Makefile->GetDefinition("UNIX"))
-    {
-    buildname = "";
-    cmSystemTools::RunSingleCommand("uname -a", &buildname);
-    if(buildname.length())
-      {
+  if (mf.GetDefinition("UNIX")) {
+    buildname.clear();
+    cmSystemTools::RunSingleCommand("uname -a", &buildname, &buildname);
+    if (!buildname.empty()) {
       std::string RegExp = "([^ ]*) [^ ]* ([^ ]*) ";
-      cmsys::RegularExpression reg( RegExp.c_str() );
-      if(reg.find(buildname.c_str()))
-        {
+      cmsys::RegularExpression reg(RegExp);
+      if (reg.find(buildname)) {
         buildname = reg.match(1) + "-" + reg.match(2);
-        }
       }
     }
+  }
   std::string compiler = "${CMAKE_CXX_COMPILER}";
-  this->Makefile->ExpandVariablesInString ( compiler );
+  mf.ExpandVariablesInString(compiler);
   buildname += "-";
   buildname += cmSystemTools::GetFilenameName(compiler);
-  cmSystemTools::ReplaceString(buildname,
-                               "/", "_");
-  cmSystemTools::ReplaceString(buildname,
-                               "(", "_");
-  cmSystemTools::ReplaceString(buildname,
-                               ")", "_");
-  
-  this->Makefile->AddCacheDefinition(args[0].c_str(),
-                                 buildname.c_str(),
-                                 "Name of build.",
-                                 cmCacheManager::STRING);
+  std::replace(buildname.begin(), buildname.end(), '/', '_');
+  std::replace(buildname.begin(), buildname.end(), '(', '_');
+  std::replace(buildname.begin(), buildname.end(), ')', '_');
+
+  mf.AddCacheDefinition(args[0], buildname, "Name of build.",
+                        cmStateEnums::STRING);
   return true;
 }
-

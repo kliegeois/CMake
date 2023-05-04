@@ -1,344 +1,311 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmFileCommand.h"
-#include "cmake.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <set>
+#include <sstream>
+#include <utility>
+#include <vector>
+
+#include <cm/memory>
+#include <cm/string_view>
+#include <cmext/algorithm>
+#include <cmext/string_view>
+
+#include <cm3p/kwiml/int.h>
+
+#include "cmsys/FStream.hxx"
+#include "cmsys/Glob.hxx"
+#include "cmsys/RegularExpression.hxx"
+
+#include "cm_sys_stat.h"
+
+#include "cmAlgorithms.h"
+#include "cmArgumentParser.h"
+#include "cmCMakePath.h"
+#include "cmCryptoHash.h"
+#include "cmELF.h"
+#include "cmExecutionStatus.h"
+#include "cmFSPermissions.h"
+#include "cmFileCopier.h"
+#include "cmFileInstaller.h"
+#include "cmFileLockPool.h"
+#include "cmFileTimes.h"
+#include "cmGeneratedFileStream.h"
+#include "cmGeneratorExpression.h"
+#include "cmGlobalGenerator.h"
 #include "cmHexFileConverter.h"
-#include "cmFileTimeComparison.h"
+#include "cmListFileCache.h"
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmNewLineStyle.h"
+#include "cmPolicies.h"
+#include "cmRange.h"
+#include "cmRuntimeDependencyArchive.h"
+#include "cmState.h"
+#include "cmStringAlgorithms.h"
+#include "cmSubcommandTable.h"
+#include "cmSystemTools.h"
+#include "cmTimestamp.h"
+#include "cmValue.h"
+#include "cmWorkingDirectory.h"
+#include "cmake.h"
 
-#include <sys/types.h>
-#include <sys/stat.h>
+#if !defined(CMAKE_BOOTSTRAP)
+#  include <cm3p/curl/curl.h>
 
-#include <cmsys/Directory.hxx>
-#include <cmsys/Glob.hxx>
-#include <cmsys/RegularExpression.hxx>
-
-// Table of permissions flags.
-#if defined(_WIN32) && !defined(__CYGWIN__)
-static mode_t mode_owner_read = S_IREAD;
-static mode_t mode_owner_write = S_IWRITE;
-static mode_t mode_owner_execute = S_IEXEC;
-static mode_t mode_group_read = 0;
-static mode_t mode_group_write = 0;
-static mode_t mode_group_execute = 0;
-static mode_t mode_world_read = 0;
-static mode_t mode_world_write = 0;
-static mode_t mode_world_execute = 0;
-static mode_t mode_setuid = 0;
-static mode_t mode_setgid = 0;
-#else
-static mode_t mode_owner_read = S_IRUSR;
-static mode_t mode_owner_write = S_IWUSR;
-static mode_t mode_owner_execute = S_IXUSR;
-static mode_t mode_group_read = S_IRGRP;
-static mode_t mode_group_write = S_IWGRP;
-static mode_t mode_group_execute = S_IXGRP;
-static mode_t mode_world_read = S_IROTH;
-static mode_t mode_world_write = S_IWOTH;
-static mode_t mode_world_execute = S_IXOTH;
-static mode_t mode_setuid = S_ISUID;
-static mode_t mode_setgid = S_ISGID;
+#  include "cmCurl.h"
+#  include "cmFileLockResult.h"
 #endif
 
-// cmLibraryCommand
-bool cmFileCommand::InitialPass(std::vector<std::string> const& args)
-{
-  if(args.size() < 2 )
-    {
-    this->SetError("must be called with at least two arguments.");
-    return false;
-    }
-  std::string subCommand = args[0];
-  if ( subCommand == "WRITE" )
-    {
-    return this->HandleWriteCommand(args, false);
-    }
-  else if ( subCommand == "APPEND" )
-    {
-    return this->HandleWriteCommand(args, true);
-    }
-  else if ( subCommand == "READ" )
-    {
-    return this->HandleReadCommand(args);
-    }
-  else if ( subCommand == "STRINGS" )
-    {
-    return this->HandleStringsCommand(args);
-    }
-  else if ( subCommand == "GLOB" )
-    {
-    return this->HandleGlobCommand(args, false);
-    }
-  else if ( subCommand == "GLOB_RECURSE" )
-    {
-    return this->HandleGlobCommand(args, true);
-    }
-  else if ( subCommand == "MAKE_DIRECTORY" )
-    {
-    return this->HandleMakeDirectoryCommand(args);
-    }
-  else if ( subCommand == "REMOVE" )
-    {
-    return this->HandleRemove(args, false);
-    }
-  else if ( subCommand == "REMOVE_RECURSE" )
-    {
-    return this->HandleRemove(args, true);
-    }
-  else if ( subCommand == "INSTALL" )
-    {
-    return this->HandleInstallCommand(args);
-    }
-  else if ( subCommand == "RELATIVE_PATH" )
-    {
-    return this->HandleRelativePathCommand(args);
-    }
-  else if ( subCommand == "TO_CMAKE_PATH" )
-    {
-    return this->HandleCMakePathCommand(args, false);
-    }
-  else if ( subCommand == "TO_NATIVE_PATH" )
-    {
-    return this->HandleCMakePathCommand(args, true);
-    }
+namespace {
 
-  std::string e = "does not recognize sub-command "+subCommand;
-  this->SetError(e.c_str());
-  return false;
-}
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleWriteCommand(std::vector<std::string> const& args,
-  bool append)
+bool HandleWriteImpl(std::vector<std::string> const& args, bool append,
+                     cmExecutionStatus& status)
 {
-  std::string message;
-  std::vector<std::string>::const_iterator i = args.begin();
+  auto i = args.begin();
 
   i++; // Get rid of subcommand
 
   std::string fileName = *i;
-  if ( !cmsys::SystemTools::FileIsFullPath(i->c_str()) )
-    {
-    fileName = this->Makefile->GetCurrentDirectory();
-    fileName += "/" + *i;
-    }
+  if (!cmsys::SystemTools::FileIsFullPath(*i)) {
+    fileName =
+      cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', *i);
+  }
 
   i++;
 
-  for(;i != args.end(); ++i)
-    {
-    message += *i;
-    }
-  if ( !this->Makefile->CanIWriteThisFile(fileName.c_str()) )
-    {
-    std::string e
-      = "attempted to write a file: " + fileName +
-      " into a source directory.";
-    this->SetError(e.c_str());
+  if (!status.GetMakefile().CanIWriteThisFile(fileName)) {
+    std::string e =
+      "attempted to write a file: " + fileName + " into a source directory.";
+    status.SetError(e);
     cmSystemTools::SetFatalErrorOccured();
     return false;
-    }
+  }
   std::string dir = cmSystemTools::GetFilenamePath(fileName);
-  cmSystemTools::MakeDirectory(dir.c_str());
+  cmSystemTools::MakeDirectory(dir);
 
-  mode_t mode =
-#if defined( _MSC_VER ) || defined( __MINGW32__ )
-    S_IREAD | S_IWRITE
-#elif defined( __BORLANDC__ )
-    S_IRUSR | S_IWUSR
-#else
-    S_IRUSR | S_IWUSR |
-    S_IRGRP |
-    S_IROTH
-#endif
-    ;
+  mode_t mode = 0;
+  bool writable = false;
 
   // Set permissions to writable
-  if ( cmSystemTools::GetPermissions(fileName.c_str(), mode) )
-    {
-    cmSystemTools::SetPermissions(fileName.c_str(),
-#if defined( _MSC_VER ) || defined( __MINGW32__ )
-      S_IREAD | S_IWRITE
+  if (cmSystemTools::GetPermissions(fileName, mode)) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    writable = (mode & S_IWRITE) != 0;
+    mode_t newMode = mode | S_IWRITE;
 #else
-      S_IRUSR | S_IWUSR
+    writable = mode & S_IWUSR;
+    mode_t newMode = mode | S_IWUSR | S_IWGRP;
 #endif
-    );
+    if (!writable) {
+      cmSystemTools::SetPermissions(fileName, newMode);
     }
+  }
   // If GetPermissions fails, pretend like it is ok. File open will fail if
   // the file is not writable
-  std::ofstream file(fileName.c_str(), append?std::ios::app: std::ios::out);
-  if ( !file )
-    {
-    std::string error = "Internal CMake error when trying to open file: ";
-    error += fileName.c_str();
-    error += " for writing.";
-    this->SetError(error.c_str());
+  cmsys::ofstream file(fileName.c_str(),
+                       append ? std::ios::app : std::ios::out);
+  if (!file) {
+    std::string error =
+      cmStrCat("failed to open for writing (",
+               cmSystemTools::GetLastSystemError(), "):\n  ", fileName);
+    status.SetError(error);
     return false;
-    }
+  }
+  std::string message = cmJoin(cmMakeRange(i, args.end()), std::string());
   file << message;
+  if (!file) {
+    std::string error =
+      cmStrCat("write failed (", cmSystemTools::GetLastSystemError(), "):\n  ",
+               fileName);
+    status.SetError(error);
+    return false;
+  }
   file.close();
-  cmSystemTools::SetPermissions(fileName.c_str(), mode);
-  this->Makefile->AddWrittenFile(fileName.c_str());
+  if (mode && !writable) {
+    cmSystemTools::SetPermissions(fileName, mode);
+  }
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleReadCommand(std::vector<std::string> const& args)
+bool HandleWriteCommand(std::vector<std::string> const& args,
+                        cmExecutionStatus& status)
 {
-  if ( args.size() < 3 )
-    {
-    this->SetError("READ must be called with at least two additional "
-                   "arguments");
+  return HandleWriteImpl(args, false, status);
+}
+
+bool HandleAppendCommand(std::vector<std::string> const& args,
+                         cmExecutionStatus& status)
+{
+  return HandleWriteImpl(args, true, status);
+}
+
+bool HandleReadCommand(std::vector<std::string> const& args,
+                       cmExecutionStatus& status)
+{
+  if (args.size() < 3) {
+    status.SetError("READ must be called with at least two additional "
+                    "arguments");
     return false;
-    }
+  }
 
-  cmCommandArgumentsHelper argHelper;
-  cmCommandArgumentGroup group;
+  std::string const& fileNameArg = args[1];
+  std::string const& variable = args[2];
 
-  cmCAString readArg    (&argHelper, "READ");
-  cmCAString fileNameArg    (&argHelper, 0);
-  cmCAString resultArg      (&argHelper, 0);
+  struct Arguments
+  {
+    std::string Offset;
+    std::string Limit;
+    bool Hex = false;
+  };
 
-  cmCAString offsetArg      (&argHelper, "OFFSET", &group);
-  cmCAString limitArg       (&argHelper, "LIMIT", &group);
-  cmCAEnabler hexOutputArg  (&argHelper, "HEX", &group);
-  readArg.Follows(0);
-  fileNameArg.Follows(&readArg);
-  resultArg.Follows(&fileNameArg);
-  group.Follows(&resultArg);
-  argHelper.Parse(&args, 0);
+  static auto const parser = cmArgumentParser<Arguments>{}
+                               .Bind("OFFSET"_s, &Arguments::Offset)
+                               .Bind("LIMIT"_s, &Arguments::Limit)
+                               .Bind("HEX"_s, &Arguments::Hex);
 
-  std::string fileName = fileNameArg.GetString();
-  if ( !cmsys::SystemTools::FileIsFullPath(fileName.c_str()) )
-    {
-    fileName = this->Makefile->GetCurrentDirectory();
-    fileName += "/" + fileNameArg.GetString();
-    }
+  Arguments const arguments = parser.Parse(cmMakeRange(args).advance(3));
 
-  std::string variable = resultArg.GetString();
+  std::string fileName = fileNameArg;
+  if (!cmsys::SystemTools::FileIsFullPath(fileName)) {
+    fileName = cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/',
+                        fileNameArg);
+  }
 
-  // Open the specified file.
+// Open the specified file.
 #if defined(_WIN32) || defined(__CYGWIN__)
-  std::ifstream file(fileName.c_str(), std::ios::in | (hexOutputArg.IsEnabled()?std::ios::binary:0));
+  cmsys::ifstream file(fileName.c_str(),
+                       arguments.Hex ? (std::ios::binary | std::ios::in)
+                                     : std::ios::in);
 #else
-  std::ifstream file(fileName.c_str(), std::ios::in);
+  cmsys::ifstream file(fileName.c_str());
 #endif
 
-  if ( !file )
-    {
-    std::string error = "Internal CMake error when trying to open file: ";
-    error += fileName.c_str();
-    error += " for reading.";
-    this->SetError(error.c_str());
+  if (!file) {
+    std::string error =
+      cmStrCat("failed to open for reading (",
+               cmSystemTools::GetLastSystemError(), "):\n  ", fileName);
+    status.SetError(error);
     return false;
-    }
+  }
 
   // is there a limit?
   long sizeLimit = -1;
-  if (limitArg.GetString().size() > 0)
-    {
-    sizeLimit = atoi(limitArg.GetCString());
-    }
+  if (!arguments.Limit.empty()) {
+    sizeLimit = atoi(arguments.Limit.c_str());
+  }
 
   // is there an offset?
   long offset = 0;
-  if (offsetArg.GetString().size() > 0)
-    {
-    offset = atoi(offsetArg.GetCString());
-    }
+  if (!arguments.Offset.empty()) {
+    offset = atoi(arguments.Offset.c_str());
+  }
 
-  file.seekg(offset);
+  file.seekg(offset, std::ios::beg); // explicit ios::beg for IBM VisualAge 6
 
   std::string output;
 
-  if (hexOutputArg.IsEnabled())
-    {
+  if (arguments.Hex) {
     // Convert part of the file into hex code
-    int c;
-    while((sizeLimit != 0) && (c = file.get(), file))
-      {
+    char c;
+    while ((sizeLimit != 0) && (file.get(c))) {
       char hex[4];
-      sprintf(hex, "%x", c&0xff);
+      snprintf(hex, sizeof(hex), "%.2x", c & 0xff);
       output += hex;
-      if (sizeLimit > 0)
-        {
+      if (sizeLimit > 0) {
         sizeLimit--;
-        }
       }
     }
-  else
-    {
+  } else {
     std::string line;
     bool has_newline = false;
-    while (sizeLimit != 0 &&
-          cmSystemTools::GetLineFromStream(file, line, &has_newline,
-                                            sizeLimit) )
-      {
-      if (sizeLimit > 0)
-        {
+    while (
+      sizeLimit != 0 &&
+      cmSystemTools::GetLineFromStream(file, line, &has_newline, sizeLimit)) {
+      if (sizeLimit > 0) {
         sizeLimit = sizeLimit - static_cast<long>(line.size());
-        if (has_newline)
-          {
+        if (has_newline) {
           sizeLimit--;
-          }
-        if (sizeLimit < 0)
-          {
-          sizeLimit = 0;
-          }
         }
-      output += line;
-      if ( has_newline )
-        {
-        output += "\n";
+        if (sizeLimit < 0) {
+          sizeLimit = 0;
         }
       }
+      output += line;
+      if (has_newline) {
+        output += "\n";
+      }
     }
-  this->Makefile->AddDefinition(variable.c_str(), output.c_str());
+  }
+  status.GetMakefile().AddDefinition(variable, output);
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleStringsCommand(std::vector<std::string> const& args)
+bool HandleHashCommand(std::vector<std::string> const& args,
+                       cmExecutionStatus& status)
 {
-  if(args.size() < 3)
-    {
-    this->SetError("STRINGS requires a file name and output variable");
+#if !defined(CMAKE_BOOTSTRAP)
+  if (args.size() != 3) {
+    status.SetError(
+      cmStrCat(args[0], " requires a file name and output variable"));
     return false;
+  }
+
+  std::unique_ptr<cmCryptoHash> hash(cmCryptoHash::New(args[0]));
+  if (hash) {
+    std::string out = hash->HashFile(args[1]);
+    if (!out.empty()) {
+      status.GetMakefile().AddDefinition(args[2], out);
+      return true;
     }
+    status.SetError(cmStrCat(args[0], " failed to read file \"", args[1],
+                             "\": ", cmSystemTools::GetLastSystemError()));
+  }
+  return false;
+#else
+  status.SetError(cmStrCat(args[0], " not available during bootstrap"));
+  return false;
+#endif
+}
+
+bool HandleStringsCommand(std::vector<std::string> const& args,
+                          cmExecutionStatus& status)
+{
+  if (args.size() < 3) {
+    status.SetError("STRINGS requires a file name and output variable");
+    return false;
+  }
 
   // Get the file to read.
   std::string fileName = args[1];
-  if(!cmsys::SystemTools::FileIsFullPath(fileName.c_str()))
-    {
-    fileName = this->Makefile->GetCurrentDirectory();
-    fileName += "/" + args[1];
-    }
+  if (!cmsys::SystemTools::FileIsFullPath(fileName)) {
+    fileName =
+      cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', args[1]);
+  }
 
   // Get the variable in which to store the results.
   std::string outVar = args[2];
 
   // Parse the options.
-  enum { arg_none,
-         arg_limit_input,
-         arg_limit_output,
-         arg_limit_count,
-         arg_length_minimum,
-         arg_length_maximum,
-         arg__maximum,
-         arg_regex };
+  enum
+  {
+    arg_none,
+    arg_limit_input,
+    arg_limit_output,
+    arg_limit_count,
+    arg_length_minimum,
+    arg_length_maximum,
+    arg_maximum,
+    arg_regex,
+    arg_encoding
+  };
   unsigned int minlen = 0;
   unsigned int maxlen = 0;
   int limit_input = -1;
@@ -348,297 +315,313 @@ bool cmFileCommand::HandleStringsCommand(std::vector<std::string> const& args)
   bool have_regex = false;
   bool newline_consume = false;
   bool hex_conversion_enabled = true;
+  enum
+  {
+    encoding_none = cmsys::FStream::BOM_None,
+    encoding_utf8 = cmsys::FStream::BOM_UTF8,
+    encoding_utf16le = cmsys::FStream::BOM_UTF16LE,
+    encoding_utf16be = cmsys::FStream::BOM_UTF16BE,
+    encoding_utf32le = cmsys::FStream::BOM_UTF32LE,
+    encoding_utf32be = cmsys::FStream::BOM_UTF32BE
+  };
+  int encoding = encoding_none;
   int arg_mode = arg_none;
-  for(unsigned int i=3; i < args.size(); ++i)
-    {
-    if(args[i] == "LIMIT_INPUT")
-      {
+  for (unsigned int i = 3; i < args.size(); ++i) {
+    if (args[i] == "LIMIT_INPUT") {
       arg_mode = arg_limit_input;
-      }
-    else if(args[i] == "LIMIT_OUTPUT")
-      {
+    } else if (args[i] == "LIMIT_OUTPUT") {
       arg_mode = arg_limit_output;
-      }
-    else if(args[i] == "LIMIT_COUNT")
-      {
+    } else if (args[i] == "LIMIT_COUNT") {
       arg_mode = arg_limit_count;
-      }
-    else if(args[i] == "LENGTH_MINIMUM")
-      {
+    } else if (args[i] == "LENGTH_MINIMUM") {
       arg_mode = arg_length_minimum;
-      }
-    else if(args[i] == "LENGTH_MAXIMUM")
-      {
+    } else if (args[i] == "LENGTH_MAXIMUM") {
       arg_mode = arg_length_maximum;
-      }
-    else if(args[i] == "REGEX")
-      {
+    } else if (args[i] == "REGEX") {
       arg_mode = arg_regex;
-      }
-    else if(args[i] == "NEWLINE_CONSUME")
-      {
+    } else if (args[i] == "NEWLINE_CONSUME") {
       newline_consume = true;
       arg_mode = arg_none;
-      }
-    else if(args[i] == "NO_HEX_CONVERSION")
-      {
+    } else if (args[i] == "NO_HEX_CONVERSION") {
       hex_conversion_enabled = false;
       arg_mode = arg_none;
-      }
-    else if(arg_mode == arg_limit_input)
-      {
-      if(sscanf(args[i].c_str(), "%d", &limit_input) != 1 ||
-         limit_input < 0)
-        {
-        cmOStringStream e;
-        e << "STRINGS option LIMIT_INPUT value \""
-          << args[i] << "\" is not an unsigned integer.";
-        this->SetError(e.str().c_str());
+    } else if (args[i] == "ENCODING") {
+      arg_mode = arg_encoding;
+    } else if (arg_mode == arg_limit_input) {
+      if (sscanf(args[i].c_str(), "%d", &limit_input) != 1 ||
+          limit_input < 0) {
+        status.SetError(cmStrCat("STRINGS option LIMIT_INPUT value \"",
+                                 args[i], "\" is not an unsigned integer."));
         return false;
-        }
-      arg_mode = arg_none;
       }
-    else if(arg_mode == arg_limit_output)
-      {
-      if(sscanf(args[i].c_str(), "%d", &limit_output) != 1 ||
-         limit_output < 0)
-        {
-        cmOStringStream e;
-        e << "STRINGS option LIMIT_OUTPUT value \""
-          << args[i] << "\" is not an unsigned integer.";
-        this->SetError(e.str().c_str());
+      arg_mode = arg_none;
+    } else if (arg_mode == arg_limit_output) {
+      if (sscanf(args[i].c_str(), "%d", &limit_output) != 1 ||
+          limit_output < 0) {
+        status.SetError(cmStrCat("STRINGS option LIMIT_OUTPUT value \"",
+                                 args[i], "\" is not an unsigned integer."));
         return false;
-        }
-      arg_mode = arg_none;
       }
-    else if(arg_mode == arg_limit_count)
-      {
+      arg_mode = arg_none;
+    } else if (arg_mode == arg_limit_count) {
       int count;
-      if(sscanf(args[i].c_str(), "%d", &count) != 1 || count < 0)
-        {
-        cmOStringStream e;
-        e << "STRINGS option LIMIT_COUNT value \""
-          << args[i] << "\" is not an unsigned integer.";
-        this->SetError(e.str().c_str());
+      if (sscanf(args[i].c_str(), "%d", &count) != 1 || count < 0) {
+        status.SetError(cmStrCat("STRINGS option LIMIT_COUNT value \"",
+                                 args[i], "\" is not an unsigned integer."));
         return false;
-        }
+      }
       limit_count = count;
       arg_mode = arg_none;
-      }
-    else if(arg_mode == arg_length_minimum)
-      {
+    } else if (arg_mode == arg_length_minimum) {
       int len;
-      if(sscanf(args[i].c_str(), "%d", &len) != 1 || len < 0)
-        {
-        cmOStringStream e;
-        e << "STRINGS option LENGTH_MINIMUM value \""
-          << args[i] << "\" is not an unsigned integer.";
-        this->SetError(e.str().c_str());
+      if (sscanf(args[i].c_str(), "%d", &len) != 1 || len < 0) {
+        status.SetError(cmStrCat("STRINGS option LENGTH_MINIMUM value \"",
+                                 args[i], "\" is not an unsigned integer."));
         return false;
-        }
+      }
       minlen = len;
       arg_mode = arg_none;
-      }
-    else if(arg_mode == arg_length_maximum)
-      {
+    } else if (arg_mode == arg_length_maximum) {
       int len;
-      if(sscanf(args[i].c_str(), "%d", &len) != 1 || len < 0)
-        {
-        cmOStringStream e;
-        e << "STRINGS option LENGTH_MAXIMUM value \""
-          << args[i] << "\" is not an unsigned integer.";
-        this->SetError(e.str().c_str());
+      if (sscanf(args[i].c_str(), "%d", &len) != 1 || len < 0) {
+        status.SetError(cmStrCat("STRINGS option LENGTH_MAXIMUM value \"",
+                                 args[i], "\" is not an unsigned integer."));
         return false;
-        }
+      }
       maxlen = len;
       arg_mode = arg_none;
-      }
-    else if(arg_mode == arg_regex)
-      {
-      if(!regex.compile(args[i].c_str()))
-        {
-        cmOStringStream e;
-        e << "STRINGS option REGEX value \""
-          << args[i] << "\" could not be compiled.";
-        this->SetError(e.str().c_str());
+    } else if (arg_mode == arg_regex) {
+      if (!regex.compile(args[i])) {
+        status.SetError(cmStrCat("STRINGS option REGEX value \"", args[i],
+                                 "\" could not be compiled."));
         return false;
-        }
+      }
       have_regex = true;
       arg_mode = arg_none;
+    } else if (arg_mode == arg_encoding) {
+      if (args[i] == "UTF-8") {
+        encoding = encoding_utf8;
+      } else if (args[i] == "UTF-16LE") {
+        encoding = encoding_utf16le;
+      } else if (args[i] == "UTF-16BE") {
+        encoding = encoding_utf16be;
+      } else if (args[i] == "UTF-32LE") {
+        encoding = encoding_utf32le;
+      } else if (args[i] == "UTF-32BE") {
+        encoding = encoding_utf32be;
+      } else {
+        status.SetError(cmStrCat("STRINGS option ENCODING \"", args[i],
+                                 "\" not recognized."));
+        return false;
       }
-    else
-      {
-      cmOStringStream e;
-      e << "STRINGS given unknown argument \""
-        << args[i] << "\"";
-      this->SetError(e.str().c_str());
+      arg_mode = arg_none;
+    } else {
+      status.SetError(
+        cmStrCat("STRINGS given unknown argument \"", args[i], "\""));
       return false;
-      }
     }
+  }
 
-  if (hex_conversion_enabled)
-    {
+  if (hex_conversion_enabled) {
     // TODO: should work without temp file, but just on a memory buffer
-    std::string binaryFileName = this->Makefile->GetCurrentOutputDirectory();
-    binaryFileName += cmake::GetCMakeFilesDirectory();
-    binaryFileName += "/FileCommandStringsBinaryFile";
-    if(cmHexFileConverter::TryConvert(fileName.c_str(),binaryFileName.c_str()))
-      {
+    std::string binaryFileName =
+      cmStrCat(status.GetMakefile().GetCurrentBinaryDirectory(),
+               "/CMakeFiles/FileCommandStringsBinaryFile");
+    if (cmHexFileConverter::TryConvert(fileName, binaryFileName)) {
       fileName = binaryFileName;
-      }
     }
+  }
 
-  // Open the specified file.
+// Open the specified file.
 #if defined(_WIN32) || defined(__CYGWIN__)
-  std::ifstream fin(fileName.c_str(), std::ios::in | std::ios::binary);
+  cmsys::ifstream fin(fileName.c_str(), std::ios::in | std::ios::binary);
 #else
-  std::ifstream fin(fileName.c_str(), std::ios::in);
+  cmsys::ifstream fin(fileName.c_str());
 #endif
-  if(!fin)
-    {
-    cmOStringStream e;
-    e << "STRINGS file \"" << fileName << "\" cannot be read.";
-    this->SetError(e.str().c_str());
+  if (!fin) {
+    status.SetError(
+      cmStrCat("STRINGS file \"", fileName, "\" cannot be read."));
     return false;
-    }
+  }
+
+  // If BOM is found and encoding was not specified, use the BOM
+  int bom_found = cmsys::FStream::ReadBOM(fin);
+  if (encoding == encoding_none && bom_found != cmsys::FStream::BOM_None) {
+    encoding = bom_found;
+  }
+
+  unsigned int bytes_rem = 0;
+  if (encoding == encoding_utf16le || encoding == encoding_utf16be) {
+    bytes_rem = 1;
+  }
+  if (encoding == encoding_utf32le || encoding == encoding_utf32be) {
+    bytes_rem = 3;
+  }
 
   // Parse strings out of the file.
   int output_size = 0;
   std::vector<std::string> strings;
   std::string s;
-  int c;
-  while((!limit_count || strings.size() < limit_count) &&
-        (limit_input < 0 || static_cast<int>(fin.tellg()) < limit_input) &&
-        (c = fin.get(), fin))
-    {
-    if(c == '\0')
-      {
-      // A terminating null character has been found.  Check if the
-      // current string matches the requirements.  Since it was
-      // terminated by a null character, we require that the length be
-      // at least one no matter what the user specified.
-      if(s.length() >= minlen && s.length() >= 1 &&
-         (!have_regex || regex.find(s.c_str())))
-        {
-        output_size += static_cast<int>(s.size()) + 1;
-        if(limit_output >= 0 && output_size >= limit_output)
-          {
-          s = "";
-          break;
-          }
-        strings.push_back(s);
-        }
+  while ((!limit_count || strings.size() < limit_count) &&
+         (limit_input < 0 || static_cast<int>(fin.tellg()) < limit_input) &&
+         fin) {
+    std::string current_str;
 
-      // Reset the string to empty.
-      s = "";
+    int c = fin.get();
+    for (unsigned int i = 0; i < bytes_rem; ++i) {
+      int c1 = fin.get();
+      if (!fin) {
+        fin.putback(static_cast<char>(c1));
+        break;
       }
-    else if(c == '\n' && !newline_consume)
-      {
+      c = (c << 8) | c1;
+    }
+    if (encoding == encoding_utf16le) {
+      c = ((c & 0xFF) << 8) | ((c & 0xFF00) >> 8);
+    } else if (encoding == encoding_utf32le) {
+      c = (((c & 0xFF) << 24) | ((c & 0xFF00) << 8) | ((c & 0xFF0000) >> 8) |
+           ((c & 0xFF000000) >> 24));
+    }
+
+    if (c == '\r') {
+      // Ignore CR character to make output always have UNIX newlines.
+      continue;
+    }
+
+    if (c >= 0 && c <= 0xFF &&
+        (isprint(c) || c == '\t' || (c == '\n' && newline_consume))) {
+      // This is an ASCII character that may be part of a string.
+      // Cast added to avoid compiler warning. Cast is ok because
+      // c is guaranteed to fit in char by the above if...
+      current_str += static_cast<char>(c);
+    } else if (encoding == encoding_utf8) {
+      // Check for UTF-8 encoded string (up to 4 octets)
+      static const unsigned char utf8_check_table[3][2] = {
+        { 0xE0, 0xC0 },
+        { 0xF0, 0xE0 },
+        { 0xF8, 0xF0 },
+      };
+
+      // how many octets are there?
+      unsigned int num_utf8_bytes = 0;
+      for (unsigned int j = 0; num_utf8_bytes == 0 && j < 3; j++) {
+        if ((c & utf8_check_table[j][0]) == utf8_check_table[j][1]) {
+          num_utf8_bytes = j + 2;
+        }
+      }
+
+      // get subsequent octets and check that they are valid
+      for (unsigned int j = 0; j < num_utf8_bytes; j++) {
+        if (j != 0) {
+          c = fin.get();
+          if (!fin || (c & 0xC0) != 0x80) {
+            fin.putback(static_cast<char>(c));
+            break;
+          }
+        }
+        current_str += static_cast<char>(c);
+      }
+
+      // if this was an invalid utf8 sequence, discard the data, and put
+      // back subsequent characters
+      if ((current_str.length() != num_utf8_bytes)) {
+        for (unsigned int j = 0; j < current_str.size() - 1; j++) {
+          fin.putback(current_str[current_str.size() - 1 - j]);
+        }
+        current_str.clear();
+      }
+    }
+
+    if (c == '\n' && !newline_consume) {
       // The current line has been terminated.  Check if the current
       // string matches the requirements.  The length may now be as
       // low as zero since blank lines are allowed.
-      if(s.length() >= minlen &&
-         (!have_regex || regex.find(s.c_str())))
-        {
+      if (s.length() >= minlen && (!have_regex || regex.find(s))) {
         output_size += static_cast<int>(s.size()) + 1;
-        if(limit_output >= 0 && output_size >= limit_output)
-          {
-          s = "";
+        if (limit_output >= 0 && output_size >= limit_output) {
+          s.clear();
           break;
-          }
-        strings.push_back(s);
         }
+        strings.push_back(s);
+      }
 
       // Reset the string to empty.
-      s = "";
-      }
-    else if(c == '\r')
-      {
-      // Ignore CR character to make output always have UNIX newlines.
-      }
-    else if(c >= 0x20 && c < 0x7F || c == '\t' ||
-            (c == '\n' && newline_consume))
-      {
-      // This is an ASCII character that may be part of a string.
-      s += c;
-      }
-    else
-      {
-      // This is a non-string character.  Reset the string to emtpy.
-      s = "";
+      s.clear();
+    } else if (current_str.empty()) {
+      // A non-string character has been found.  Check if the current
+      // string matches the requirements.  We require that the length
+      // be at least one no matter what the user specified.
+      if (s.length() >= minlen && !s.empty() &&
+          (!have_regex || regex.find(s))) {
+        output_size += static_cast<int>(s.size()) + 1;
+        if (limit_output >= 0 && output_size >= limit_output) {
+          s.clear();
+          break;
+        }
+        strings.push_back(s);
       }
 
-    // Terminate a string if the maximum length is reached.
-    if(maxlen > 0 && s.size() == maxlen)
-      {
-      if(s.length() >= minlen &&
-         (!have_regex || regex.find(s.c_str())))
-        {
-        output_size += static_cast<int>(s.size()) + 1;
-        if(limit_output >= 0 && output_size >= limit_output)
-          {
-          s = "";
-          break;
-          }
-        strings.push_back(s);
-        }
-      s = "";
-      }
+      // Reset the string to empty.
+      s.clear();
+    } else {
+      s += current_str;
     }
+
+    if (maxlen > 0 && s.size() == maxlen) {
+      // Terminate a string if the maximum length is reached.
+      if (s.length() >= minlen && (!have_regex || regex.find(s))) {
+        output_size += static_cast<int>(s.size()) + 1;
+        if (limit_output >= 0 && output_size >= limit_output) {
+          s.clear();
+          break;
+        }
+        strings.push_back(s);
+      }
+      s.clear();
+    }
+  }
 
   // If there is a non-empty current string we have hit the end of the
   // input file or the input size limit.  Check if the current string
   // matches the requirements.
-  if((!limit_count || strings.size() < limit_count) &&
-     !s.empty() && s.length() >= minlen &&
-     (!have_regex || regex.find(s.c_str())))
-    {
+  if ((!limit_count || strings.size() < limit_count) && !s.empty() &&
+      s.length() >= minlen && (!have_regex || regex.find(s))) {
     output_size += static_cast<int>(s.size()) + 1;
-    if(limit_output < 0 || output_size < limit_output)
-      {
+    if (limit_output < 0 || output_size < limit_output) {
       strings.push_back(s);
-      }
     }
+  }
 
   // Encode the result in a CMake list.
   const char* sep = "";
   std::string output;
-  for(std::vector<std::string>::const_iterator si = strings.begin();
-      si != strings.end(); ++si)
-    {
+  for (std::string const& sr : strings) {
     // Separate the strings in the output to make it a list.
     output += sep;
     sep = ";";
 
     // Store the string in the output, but escape semicolons to
     // make sure it is a list.
-    std::string const& sr = *si;
-    for(unsigned int i=0; i < sr.size(); ++i)
-      {
-      if(sr[i] == ';')
-        {
+    for (char i : sr) {
+      if (i == ';') {
         output += '\\';
-        }
-      output += sr[i];
       }
+      output += i;
     }
+  }
 
   // Save the output in a makefile variable.
-  this->Makefile->AddDefinition(outVar.c_str(), output.c_str());
+  status.GetMakefile().AddDefinition(outVar, output);
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleGlobCommand(std::vector<std::string> const& args,
-  bool recurse)
+bool HandleGlobImpl(std::vector<std::string> const& args, bool recurse,
+                    cmExecutionStatus& status)
 {
-  if ( args.size() < 2 )
-    {
-    this->SetError("GLOB requires at least a variable name");
-    return false;
-    }
+  // File commands has at least one argument
+  assert(args.size() > 1);
 
-  std::vector<std::string>::const_iterator i = args.begin();
+  auto i = args.begin();
 
   i++; // Get rid of subcommand
 
@@ -646,1227 +629,3155 @@ bool cmFileCommand::HandleGlobCommand(std::vector<std::string> const& args,
   i++;
   cmsys::Glob g;
   g.SetRecurse(recurse);
-  std::string output = "";
-  bool first = true;
-  for ( ; i != args.end(); ++i )
-    {
-    if ( *i == "RELATIVE" )
-      {
-      ++i; // skip RELATIVE
-      if ( i == args.end() )
-        {
-        this->SetError("GLOB requires a directory after the RELATIVE tag");
-        return false;
+
+  bool explicitFollowSymlinks = false;
+  cmPolicies::PolicyStatus policyStatus =
+    status.GetMakefile().GetPolicyStatus(cmPolicies::CMP0009);
+  if (recurse) {
+    switch (policyStatus) {
+      case cmPolicies::REQUIRED_IF_USED:
+      case cmPolicies::REQUIRED_ALWAYS:
+      case cmPolicies::NEW:
+        g.RecurseThroughSymlinksOff();
+        break;
+      case cmPolicies::WARN:
+        CM_FALLTHROUGH;
+      case cmPolicies::OLD:
+        g.RecurseThroughSymlinksOn();
+        break;
+    }
+  }
+
+  cmake* cm = status.GetMakefile().GetCMakeInstance();
+  std::vector<std::string> files;
+  bool configureDepends = false;
+  bool warnConfigureLate = false;
+  bool warnFollowedSymlinks = false;
+  const cmake::WorkingMode workingMode = cm->GetWorkingMode();
+  while (i != args.end()) {
+    if (*i == "LIST_DIRECTORIES") {
+      ++i; // skip LIST_DIRECTORIES
+      if (i != args.end()) {
+        if (cmIsOn(*i)) {
+          g.SetListDirs(true);
+          g.SetRecurseListDirs(true);
+        } else if (cmIsOff(*i)) {
+          g.SetListDirs(false);
+          g.SetRecurseListDirs(false);
+        } else {
+          status.SetError("LIST_DIRECTORIES missing bool value.");
+          return false;
         }
+        ++i;
+      } else {
+        status.SetError("LIST_DIRECTORIES missing bool value.");
+        return false;
+      }
+    } else if (*i == "FOLLOW_SYMLINKS") {
+      ++i; // skip FOLLOW_SYMLINKS
+      if (recurse) {
+        explicitFollowSymlinks = true;
+        g.RecurseThroughSymlinksOn();
+        if (i == args.end()) {
+          status.SetError(
+            "GLOB_RECURSE requires a glob expression after FOLLOW_SYMLINKS.");
+          return false;
+        }
+      }
+    } else if (*i == "RELATIVE") {
+      ++i; // skip RELATIVE
+      if (i == args.end()) {
+        status.SetError("GLOB requires a directory after the RELATIVE tag.");
+        return false;
+      }
       g.SetRelative(i->c_str());
       ++i;
-      if(i == args.end())
-        {
-        this->SetError("GLOB requires a glob expression after the directory");
+      if (i == args.end()) {
+        status.SetError(
+          "GLOB requires a glob expression after the directory.");
         return false;
+      }
+    } else if (*i == "CONFIGURE_DEPENDS") {
+      // Generated build system depends on glob results
+      if (!configureDepends && warnConfigureLate) {
+        status.GetMakefile().IssueMessage(
+          MessageType::AUTHOR_WARNING,
+          "CONFIGURE_DEPENDS flag was given after a glob expression was "
+          "already evaluated.");
+      }
+      if (workingMode != cmake::NORMAL_MODE) {
+        status.GetMakefile().IssueMessage(
+          MessageType::FATAL_ERROR,
+          "CONFIGURE_DEPENDS is invalid for script and find package modes.");
+        return false;
+      }
+      configureDepends = true;
+      ++i;
+      if (i == args.end()) {
+        status.SetError(
+          "GLOB requires a glob expression after CONFIGURE_DEPENDS.");
+        return false;
+      }
+    } else {
+      std::string expr = *i;
+      if (!cmsys::SystemTools::FileIsFullPath(*i)) {
+        expr = status.GetMakefile().GetCurrentSourceDirectory();
+        // Handle script mode
+        if (!expr.empty()) {
+          expr += "/" + *i;
+        } else {
+          expr = *i;
         }
       }
-    if ( !cmsys::SystemTools::FileIsFullPath(i->c_str()) )
-      {
-      std::string expr = this->Makefile->GetCurrentDirectory();
-      // Handle script mode
-      if ( expr.size() > 0 )
-        {
-        expr += "/" + *i;
-        g.FindFiles(expr);
+
+      cmsys::Glob::GlobMessages globMessages;
+      g.FindFiles(expr, &globMessages);
+
+      if (!globMessages.empty()) {
+        bool shouldExit = false;
+        for (cmsys::Glob::Message const& globMessage : globMessages) {
+          if (globMessage.type == cmsys::Glob::cyclicRecursion) {
+            status.GetMakefile().IssueMessage(
+              MessageType::AUTHOR_WARNING,
+              "Cyclic recursion detected while globbing for '" + *i + "':\n" +
+                globMessage.content);
+          } else if (globMessage.type == cmsys::Glob::error) {
+            status.GetMakefile().IssueMessage(
+              MessageType::FATAL_ERROR,
+              "Error has occurred while globbing for '" + *i + "' - " +
+                globMessage.content);
+            shouldExit = true;
+          } else if (cm->GetDebugOutput() || cm->GetTrace()) {
+            status.GetMakefile().IssueMessage(
+              MessageType::LOG,
+              cmStrCat("Globbing for\n  ", *i, "\nEncountered an error:\n ",
+                       globMessage.content));
+          }
         }
-      else
-        {
-        g.FindFiles(*i);
+        if (shouldExit) {
+          return false;
         }
       }
-    else
-      {
-      g.FindFiles(*i);
+
+      if (recurse && !explicitFollowSymlinks &&
+          g.GetFollowedSymlinkCount() != 0) {
+        warnFollowedSymlinks = true;
       }
-    std::vector<std::string>::size_type cc;
-    std::vector<std::string>& files = g.GetFiles();
-    for ( cc = 0; cc < files.size(); cc ++ )
-      {
-      if ( !first )
-        {
-        output += ";";
-        }
-      output += files[cc];
-      first = false;
+
+      std::vector<std::string>& foundFiles = g.GetFiles();
+      cm::append(files, foundFiles);
+
+      if (configureDepends) {
+        std::sort(foundFiles.begin(), foundFiles.end());
+        foundFiles.erase(std::unique(foundFiles.begin(), foundFiles.end()),
+                         foundFiles.end());
+        cm->AddGlobCacheEntry(
+          recurse, (recurse ? g.GetRecurseListDirs() : g.GetListDirs()),
+          (recurse ? g.GetRecurseThroughSymlinks() : false),
+          (g.GetRelative() ? g.GetRelative() : ""), expr, foundFiles, variable,
+          status.GetMakefile().GetBacktrace());
+      } else {
+        warnConfigureLate = true;
       }
+      ++i;
     }
-  this->Makefile->AddDefinition(variable.c_str(), output.c_str());
+  }
+
+  switch (policyStatus) {
+    case cmPolicies::REQUIRED_IF_USED:
+    case cmPolicies::REQUIRED_ALWAYS:
+    case cmPolicies::NEW:
+      // Correct behavior, yay!
+      break;
+    case cmPolicies::OLD:
+    // Probably not really the expected behavior, but the author explicitly
+    // asked for the old behavior... no warning.
+    case cmPolicies::WARN:
+      // Possibly unexpected old behavior *and* we actually traversed
+      // symlinks without being explicitly asked to: warn the author.
+      if (warnFollowedSymlinks) {
+        status.GetMakefile().IssueMessage(
+          MessageType::AUTHOR_WARNING,
+          cmPolicies::GetPolicyWarning(cmPolicies::CMP0009));
+      }
+      break;
+  }
+
+  std::sort(files.begin(), files.end());
+  files.erase(std::unique(files.begin(), files.end()), files.end());
+  status.GetMakefile().AddDefinition(variable, cmJoin(files, ";"));
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleMakeDirectoryCommand(
-  std::vector<std::string> const& args)
+bool HandleGlobCommand(std::vector<std::string> const& args,
+                       cmExecutionStatus& status)
 {
-  if(args.size() < 2 )
-    {
-    this->SetError("called with incorrect number of arguments");
-    return false;
-    }
+  return HandleGlobImpl(args, false, status);
+}
 
-  std::vector<std::string>::const_iterator i = args.begin();
+bool HandleGlobRecurseCommand(std::vector<std::string> const& args,
+                              cmExecutionStatus& status)
+{
+  return HandleGlobImpl(args, true, status);
+}
 
-  i++; // Get rid of subcommand
+bool HandleMakeDirectoryCommand(std::vector<std::string> const& args,
+                                cmExecutionStatus& status)
+{
+  // File command has at least one argument
+  assert(args.size() > 1);
 
   std::string expr;
-  for ( ; i != args.end(); ++i )
-    {
-    const std::string* cdir = &(*i);
-    if ( !cmsys::SystemTools::FileIsFullPath(i->c_str()) )
-      {
-      expr = this->Makefile->GetCurrentDirectory();
-      expr += "/" + *i;
+  for (std::string const& arg :
+       cmMakeRange(args).advance(1)) // Get rid of subcommand
+  {
+    const std::string* cdir = &arg;
+    if (!cmsys::SystemTools::FileIsFullPath(arg)) {
+      expr =
+        cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', arg);
       cdir = &expr;
-      }
-    if ( !this->Makefile->CanIWriteThisFile(cdir->c_str()) )
-      {
-      std::string e = "attempted to create a directory: " + *cdir
-        + " into a source directory.";
-      this->SetError(e.c_str());
+    }
+    if (!status.GetMakefile().CanIWriteThisFile(*cdir)) {
+      std::string e = "attempted to create a directory: " + *cdir +
+        " into a source directory.";
+      status.SetError(e);
       cmSystemTools::SetFatalErrorOccured();
       return false;
-      }
-    if ( !cmSystemTools::MakeDirectory(cdir->c_str()) )
-      {
+    }
+    if (!cmSystemTools::MakeDirectory(*cdir)) {
       std::string error = "problem creating directory: " + *cdir;
-      this->SetError(error.c_str());
+      status.SetError(error);
       return false;
-      }
     }
+  }
   return true;
 }
 
-//----------------------------------------------------------------------------
-// File installation helper class.
-struct cmFileInstaller
+bool HandleTouchImpl(std::vector<std::string> const& args, bool create,
+                     cmExecutionStatus& status)
 {
-  // Methods to actually install files.
-  bool InstallFile(const char* fromFile, const char* toFile, bool always);
-  bool InstallDirectory(const char* source, const char* destination,
-                        bool always);
+  // File command has at least one argument
+  assert(args.size() > 1);
 
-  // All instances need the file command and makefile using them.
-  cmFileInstaller(cmFileCommand* fc, cmMakefile* mf):
-    FileCommand(fc), Makefile(mf), DestDirLength(0), MatchlessFiles(true)
-    {
-    // Get the current manifest.
-    this->Manifest =
-      this->Makefile->GetSafeDefinition("CMAKE_INSTALL_MANIFEST_FILES");
-    }
-  ~cmFileInstaller()
-    {
-    // Save the updated install manifest.
-    this->Makefile->AddDefinition("CMAKE_INSTALL_MANIFEST_FILES",
-                                  this->Manifest.c_str());
-    }
-
-private:
-  cmFileCommand* FileCommand;
-  cmMakefile* Makefile;
-  cmFileTimeComparison FileTimes;
-public:
-
-  // The length of the destdir setting.
-  int DestDirLength;
-
-  // Whether to install a file not matching any expression.
-  bool MatchlessFiles;
-
-  // The current file manifest (semicolon separated list).
-  std::string Manifest;
-
-  // Permissions for files and directories installed by this object.
-  mode_t FilePermissions;
-  mode_t DirPermissions;
-
-  // Properties set by pattern and regex match rules.
-  struct MatchProperties
+  for (std::string const& arg :
+       cmMakeRange(args).advance(1)) // Get rid of subcommand
   {
-    bool Exclude;
-    mode_t Permissions;
-    MatchProperties(): Exclude(false), Permissions(0) {}
-  };
-  struct MatchRule
-  {
-    cmsys::RegularExpression Regex;
-    MatchProperties Properties;
-    std::string RegexString;
-    MatchRule(std::string const& regex):
-      Regex(regex.c_str()), RegexString(regex) {}
-  };
-  std::vector<MatchRule> MatchRules;
+    std::string tfile = arg;
+    if (!cmsys::SystemTools::FileIsFullPath(tfile)) {
+      tfile =
+        cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', arg);
+    }
+    if (!status.GetMakefile().CanIWriteThisFile(tfile)) {
+      std::string e =
+        "attempted to touch a file: " + tfile + " in a source directory.";
+      status.SetError(e);
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+    if (!cmSystemTools::Touch(tfile, create)) {
+      std::string error = "problem touching file: " + tfile;
+      status.SetError(error);
+      return false;
+    }
+  }
+  return true;
+}
 
-  // Get the properties from rules matching this input file.
-  MatchProperties CollectMatchProperties(const char* file,
-                                         bool isDirectory)
-    {
-    // Match rules are case-insensitive on some platforms.
-#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
-    std::string lower = cmSystemTools::LowerCase(file);
-    file = lower.c_str();
+bool HandleTouchCommand(std::vector<std::string> const& args,
+                        cmExecutionStatus& status)
+{
+  return HandleTouchImpl(args, true, status);
+}
+
+bool HandleTouchNocreateCommand(std::vector<std::string> const& args,
+                                cmExecutionStatus& status)
+{
+  return HandleTouchImpl(args, false, status);
+}
+
+bool HandleDifferentCommand(std::vector<std::string> const& args,
+                            cmExecutionStatus& status)
+{
+  /*
+    FILE(DIFFERENT <variable> FILES <lhs> <rhs>)
+   */
+
+  // Evaluate arguments.
+  const char* file_lhs = nullptr;
+  const char* file_rhs = nullptr;
+  const char* var = nullptr;
+  enum Doing
+  {
+    DoingNone,
+    DoingVar,
+    DoingFileLHS,
+    DoingFileRHS
+  };
+  Doing doing = DoingVar;
+  for (unsigned int i = 1; i < args.size(); ++i) {
+    if (args[i] == "FILES") {
+      doing = DoingFileLHS;
+    } else if (doing == DoingVar) {
+      var = args[i].c_str();
+      doing = DoingNone;
+    } else if (doing == DoingFileLHS) {
+      file_lhs = args[i].c_str();
+      doing = DoingFileRHS;
+    } else if (doing == DoingFileRHS) {
+      file_rhs = args[i].c_str();
+      doing = DoingNone;
+    } else {
+      status.SetError(cmStrCat("DIFFERENT given unknown argument ", args[i]));
+      return false;
+    }
+  }
+  if (!var) {
+    status.SetError("DIFFERENT not given result variable name.");
+    return false;
+  }
+  if (!file_lhs || !file_rhs) {
+    status.SetError("DIFFERENT not given FILES option with two file names.");
+    return false;
+  }
+
+  // Compare the files.
+  const char* result =
+    cmSystemTools::FilesDiffer(file_lhs, file_rhs) ? "1" : "0";
+  status.GetMakefile().AddDefinition(var, result);
+  return true;
+}
+
+bool HandleCopyCommand(std::vector<std::string> const& args,
+                       cmExecutionStatus& status)
+{
+  cmFileCopier copier(status);
+  return copier.Run(args);
+}
+
+bool HandleRPathChangeCommand(std::vector<std::string> const& args,
+                              cmExecutionStatus& status)
+{
+  // Evaluate arguments.
+  std::string file;
+  std::string oldRPath;
+  std::string newRPath;
+  bool removeEnvironmentRPath = false;
+  cmArgumentParser<void> parser;
+  std::vector<std::string> unknownArgs;
+  std::vector<std::string> missingArgs;
+  std::vector<std::string> parsedArgs;
+  parser.Bind("FILE"_s, file)
+    .Bind("OLD_RPATH"_s, oldRPath)
+    .Bind("NEW_RPATH"_s, newRPath)
+    .Bind("INSTALL_REMOVE_ENVIRONMENT_RPATH"_s, removeEnvironmentRPath);
+  parser.Parse(cmMakeRange(args).advance(1), &unknownArgs, &missingArgs,
+               &parsedArgs);
+  if (!unknownArgs.empty()) {
+    status.SetError(
+      cmStrCat("RPATH_CHANGE given unknown argument ", unknownArgs.front()));
+    return false;
+  }
+  if (!missingArgs.empty()) {
+    status.SetError(cmStrCat("RPATH_CHANGE \"", missingArgs.front(),
+                             "\" argument not given value."));
+    return false;
+  }
+  if (file.empty()) {
+    status.SetError("RPATH_CHANGE not given FILE option.");
+    return false;
+  }
+  if (oldRPath.empty() &&
+      std::find(parsedArgs.begin(), parsedArgs.end(), "OLD_RPATH") ==
+        parsedArgs.end()) {
+    status.SetError("RPATH_CHANGE not given OLD_RPATH option.");
+    return false;
+  }
+  if (newRPath.empty() &&
+      std::find(parsedArgs.begin(), parsedArgs.end(), "NEW_RPATH") ==
+        parsedArgs.end()) {
+    status.SetError("RPATH_CHANGE not given NEW_RPATH option.");
+    return false;
+  }
+  if (!cmSystemTools::FileExists(file, true)) {
+    status.SetError(
+      cmStrCat("RPATH_CHANGE given FILE \"", file, "\" that does not exist."));
+    return false;
+  }
+  bool success = true;
+  cmFileTimes const ft(file);
+  std::string emsg;
+  bool changed;
+
+  if (!cmSystemTools::ChangeRPath(file, oldRPath, newRPath,
+                                  removeEnvironmentRPath, &emsg, &changed)) {
+    status.SetError(cmStrCat("RPATH_CHANGE could not write new RPATH:\n  ",
+                             newRPath, "\nto the file:\n  ", file, "\n",
+                             emsg));
+    success = false;
+  }
+  if (success) {
+    if (changed) {
+      std::string message =
+        cmStrCat("Set runtime path of \"", file, "\" to \"", newRPath, '"');
+      status.GetMakefile().DisplayStatus(message, -1);
+    }
+    ft.Store(file);
+  }
+  return success;
+}
+
+bool HandleRPathSetCommand(std::vector<std::string> const& args,
+                           cmExecutionStatus& status)
+{
+  // Evaluate arguments.
+  std::string file;
+  std::string newRPath;
+  cmArgumentParser<void> parser;
+  std::vector<std::string> unknownArgs;
+  std::vector<std::string> missingArgs;
+  std::vector<std::string> parsedArgs;
+  parser.Bind("FILE"_s, file).Bind("NEW_RPATH"_s, newRPath);
+  parser.Parse(cmMakeRange(args).advance(1), &unknownArgs, &missingArgs,
+               &parsedArgs);
+  if (!unknownArgs.empty()) {
+    status.SetError(cmStrCat("RPATH_SET given unrecognized argument \"",
+                             unknownArgs.front(), "\"."));
+    return false;
+  }
+  if (!missingArgs.empty()) {
+    status.SetError(cmStrCat("RPATH_SET \"", missingArgs.front(),
+                             "\" argument not given value."));
+    return false;
+  }
+  if (file.empty()) {
+    status.SetError("RPATH_SET not given FILE option.");
+    return false;
+  }
+  if (newRPath.empty() &&
+      std::find(parsedArgs.begin(), parsedArgs.end(), "NEW_RPATH") ==
+        parsedArgs.end()) {
+    status.SetError("RPATH_SET not given NEW_RPATH option.");
+    return false;
+  }
+  if (!cmSystemTools::FileExists(file, true)) {
+    status.SetError(
+      cmStrCat("RPATH_SET given FILE \"", file, "\" that does not exist."));
+    return false;
+  }
+  bool success = true;
+  cmFileTimes const ft(file);
+  std::string emsg;
+  bool changed;
+
+  if (!cmSystemTools::SetRPath(file, newRPath, &emsg, &changed)) {
+    status.SetError(cmStrCat("RPATH_SET could not write new RPATH:\n  ",
+                             newRPath, "\nto the file:\n  ", file, "\n",
+                             emsg));
+    success = false;
+  }
+  if (success) {
+    if (changed) {
+      std::string message =
+        cmStrCat("Set runtime path of \"", file, "\" to \"", newRPath, '"');
+      status.GetMakefile().DisplayStatus(message, -1);
+    }
+    ft.Store(file);
+  }
+  return success;
+}
+
+bool HandleRPathRemoveCommand(std::vector<std::string> const& args,
+                              cmExecutionStatus& status)
+{
+  // Evaluate arguments.
+  std::string file;
+  cmArgumentParser<void> parser;
+  std::vector<std::string> unknownArgs;
+  std::vector<std::string> missingArgs;
+  parser.Bind("FILE"_s, file);
+  parser.Parse(cmMakeRange(args).advance(1), &unknownArgs, &missingArgs);
+  if (!unknownArgs.empty()) {
+    status.SetError(
+      cmStrCat("RPATH_REMOVE given unknown argument ", unknownArgs.front()));
+    return false;
+  }
+  if (!missingArgs.empty()) {
+    status.SetError(cmStrCat("RPATH_REMOVE \"", missingArgs.front(),
+                             "\" argument not given value."));
+    return false;
+  }
+  if (file.empty()) {
+    status.SetError("RPATH_REMOVE not given FILE option.");
+    return false;
+  }
+  if (!cmSystemTools::FileExists(file, true)) {
+    status.SetError(
+      cmStrCat("RPATH_REMOVE given FILE \"", file, "\" that does not exist."));
+    return false;
+  }
+  bool success = true;
+  cmFileTimes const ft(file);
+  std::string emsg;
+  bool removed;
+  if (!cmSystemTools::RemoveRPath(file, &emsg, &removed)) {
+    status.SetError(
+      cmStrCat("RPATH_REMOVE could not remove RPATH from file: \n  ", file,
+               "\n", emsg));
+    success = false;
+  }
+  if (success) {
+    if (removed) {
+      std::string message =
+        cmStrCat("Removed runtime path from \"", file, '"');
+      status.GetMakefile().DisplayStatus(message, -1);
+    }
+    ft.Store(file);
+  }
+  return success;
+}
+
+bool HandleRPathCheckCommand(std::vector<std::string> const& args,
+                             cmExecutionStatus& status)
+{
+  // Evaluate arguments.
+  std::string file;
+  std::string rpath;
+  cmArgumentParser<void> parser;
+  std::vector<std::string> unknownArgs;
+  std::vector<std::string> missingArgs;
+  std::vector<std::string> parsedArgs;
+  parser.Bind("FILE"_s, file).Bind("RPATH"_s, rpath);
+  parser.Parse(cmMakeRange(args).advance(1), &unknownArgs, &missingArgs,
+               &parsedArgs);
+  if (!unknownArgs.empty()) {
+    status.SetError(
+      cmStrCat("RPATH_CHECK given unknown argument ", unknownArgs.front()));
+    return false;
+  }
+  if (!missingArgs.empty()) {
+    status.SetError(cmStrCat("RPATH_CHECK \"", missingArgs.front(),
+                             "\" argument not given value."));
+    return false;
+  }
+  if (file.empty()) {
+    status.SetError("RPATH_CHECK not given FILE option.");
+    return false;
+  }
+  if (rpath.empty() &&
+      std::find(parsedArgs.begin(), parsedArgs.end(), "RPATH") ==
+        parsedArgs.end()) {
+    status.SetError("RPATH_CHECK not given RPATH option.");
+    return false;
+  }
+
+  // If the file exists but does not have the desired RPath then
+  // delete it.  This is used during installation to re-install a file
+  // if its RPath will change.
+  if (cmSystemTools::FileExists(file, true) &&
+      !cmSystemTools::CheckRPath(file, rpath)) {
+    cmSystemTools::RemoveFile(file);
+  }
+
+  return true;
+}
+
+bool HandleReadElfCommand(std::vector<std::string> const& args,
+                          cmExecutionStatus& status)
+{
+  if (args.size() < 4) {
+    status.SetError("READ_ELF must be called with at least three additional "
+                    "arguments.");
+    return false;
+  }
+
+  std::string const& fileNameArg = args[1];
+
+  struct Arguments
+  {
+    std::string RPath;
+    std::string RunPath;
+    std::string Error;
+  };
+
+  static auto const parser = cmArgumentParser<Arguments>{}
+                               .Bind("RPATH"_s, &Arguments::RPath)
+                               .Bind("RUNPATH"_s, &Arguments::RunPath)
+                               .Bind("CAPTURE_ERROR"_s, &Arguments::Error);
+  Arguments const arguments = parser.Parse(cmMakeRange(args).advance(2));
+
+  if (!cmSystemTools::FileExists(fileNameArg, true)) {
+    status.SetError(cmStrCat("READ_ELF given FILE \"", fileNameArg,
+                             "\" that does not exist."));
+    return false;
+  }
+
+  cmELF elf(fileNameArg.c_str());
+  if (!elf) {
+    status.SetError(cmStrCat("READ_ELF given FILE \"", fileNameArg,
+                             "\" that is not a valid ELF file."));
+    return false;
+  }
+
+  if (!arguments.RPath.empty()) {
+    if (cmELF::StringEntry const* se_rpath = elf.GetRPath()) {
+      std::string rpath(se_rpath->Value);
+      std::replace(rpath.begin(), rpath.end(), ':', ';');
+      status.GetMakefile().AddDefinition(arguments.RPath, rpath);
+    }
+  }
+  if (!arguments.RunPath.empty()) {
+    if (cmELF::StringEntry const* se_runpath = elf.GetRunPath()) {
+      std::string runpath(se_runpath->Value);
+      std::replace(runpath.begin(), runpath.end(), ':', ';');
+      status.GetMakefile().AddDefinition(arguments.RunPath, runpath);
+    }
+  }
+
+  return true;
+}
+
+bool HandleInstallCommand(std::vector<std::string> const& args,
+                          cmExecutionStatus& status)
+{
+  cmFileInstaller installer(status);
+  return installer.Run(args);
+}
+
+bool HandleRealPathCommand(std::vector<std::string> const& args,
+                           cmExecutionStatus& status)
+{
+  if (args.size() < 3) {
+    status.SetError("REAL_PATH requires a path and an output variable");
+    return false;
+  }
+
+  struct Arguments
+  {
+    std::string BaseDirectory;
+    bool ExpandTilde = false;
+  };
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("BASE_DIRECTORY"_s, &Arguments::BaseDirectory)
+      .Bind("EXPAND_TILDE"_s, &Arguments::ExpandTilde);
+
+  std::vector<std::string> unparsedArguments;
+  std::vector<std::string> keywordsMissingValue;
+  std::vector<std::string> parsedKeywords;
+  auto arguments =
+    parser.Parse(cmMakeRange(args).advance(3), &unparsedArguments,
+                 &keywordsMissingValue, &parsedKeywords);
+
+  if (!unparsedArguments.empty()) {
+    status.SetError("REAL_PATH called with unexpected arguments");
+    return false;
+  }
+  if (!keywordsMissingValue.empty()) {
+    status.SetError("BASE_DIRECTORY requires a value");
+    return false;
+  }
+
+  if (parsedKeywords.empty()) {
+    arguments.BaseDirectory = status.GetMakefile().GetCurrentSourceDirectory();
+  }
+
+  auto input = args[1];
+  if (arguments.ExpandTilde && !input.empty()) {
+    if (input[0] == '~' && (input.length() == 1 || input[1] == '/')) {
+      std::string home;
+      if (
+#if defined(_WIN32) && !defined(__CYGWIN__)
+        cmSystemTools::GetEnv("USERPROFILE", home) ||
 #endif
-
-    // Collect properties from all matching rules.
-    bool matched = false;
-    MatchProperties result;
-    for(std::vector<MatchRule>::iterator mr = this->MatchRules.begin();
-        mr != this->MatchRules.end(); ++mr)
-      {
-      if(mr->Regex.find(file))
-        {
-        matched = true;
-        result.Exclude |= mr->Properties.Exclude;
-        result.Permissions |= mr->Properties.Permissions;
-        }
-      }
-    if(!matched && !this->MatchlessFiles && !isDirectory)
-      {
-      result.Exclude = true;
-      }
-    return result;
-    }
-
-  // Append a file to the installation manifest.
-  void ManifestAppend(std::string const& file)
-    {
-    this->Manifest += ";";
-    this->Manifest += file.substr(this->DestDirLength);
-    }
-
-  // Translate an argument to a permissions bit.
-  bool CheckPermissions(std::string const& arg, mode_t& permissions)
-    {
-    if(arg == "OWNER_READ")         { permissions |= mode_owner_read; }
-    else if(arg == "OWNER_WRITE")   { permissions |= mode_owner_write; }
-    else if(arg == "OWNER_EXECUTE") { permissions |= mode_owner_execute; }
-    else if(arg == "GROUP_READ")    { permissions |= mode_group_read; }
-    else if(arg == "GROUP_WRITE")   { permissions |= mode_group_write; }
-    else if(arg == "GROUP_EXECUTE") { permissions |= mode_group_execute; }
-    else if(arg == "WORLD_READ")    { permissions |= mode_world_read; }
-    else if(arg == "WORLD_WRITE")   { permissions |= mode_world_write; }
-    else if(arg == "WORLD_EXECUTE") { permissions |= mode_world_execute; }
-    else if(arg == "SETUID")        { permissions |= mode_setuid; }
-    else if(arg == "SETGID")        { permissions |= mode_setgid; }
-    else
-      {
-      cmOStringStream e;
-      e << "INSTALL given invalid permission \"" << arg << "\".";
-      this->FileCommand->SetError(e.str().c_str());
-      return false;
-      }
-    return true;
-    }
-
-private:
-  bool InstallSymlink(const char* fromFile, const char* toFile, bool always);
-};
-
-//----------------------------------------------------------------------------
-bool cmFileInstaller::InstallSymlink(const char* fromFile, const char* toFile,
-                                     bool always)
-{
-  // Read the original symlink.
-  std::string symlinkTarget;
-  if(!cmSystemTools::ReadSymlink(fromFile, symlinkTarget))
-    {
-    cmOStringStream e;
-    e << "INSTALL cannot read symlink \"" << fromFile
-      << "\" to duplicate at \"" << toFile << "\".";
-    this->FileCommand->SetError(e.str().c_str());
-    return false;
-    }
-
-  // Compare the symlink value to that at the destination if not
-  // always installing.
-  bool copy = true;
-  if(!always)
-    {
-    std::string oldSymlinkTarget;
-    if(cmSystemTools::ReadSymlink(toFile, oldSymlinkTarget))
-      {
-      if(symlinkTarget == oldSymlinkTarget)
-        {
-        copy = false;
-        }
+        cmSystemTools::GetEnv("HOME", home)) {
+        input.replace(0, 1, home);
       }
     }
+  }
 
-  // Inform the user about this file installation.
-  std::string message = (copy? "Installing: " : "Up-to-date: ");
-  message += toFile;
-  this->Makefile->DisplayStatus(message.c_str(), -1);
+  cmCMakePath path(input, cmCMakePath::auto_format);
+  path = path.Absolute(arguments.BaseDirectory).Normal();
+  auto realPath = cmSystemTools::GetRealPath(path.GenericString());
 
-  if(copy)
-    {
-    // Remove the destination file so we can always create the symlink.
-    cmSystemTools::RemoveFile(toFile);
-
-    // Create the symlink.
-    if(!cmSystemTools::CreateSymlink(symlinkTarget.c_str(), toFile))
-      {
-      cmOStringStream e;
-      e << "INSTALL cannot duplicate symlink \"" << fromFile
-        << "\" at \"" << toFile << "\".";
-      this->FileCommand->SetError(e.str().c_str());
-      return false;
-      }
-    }
-
-  // Add the file to the manifest.
-  this->ManifestAppend(toFile);
+  status.GetMakefile().AddDefinition(args[2], realPath);
 
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmFileInstaller::InstallFile(const char* fromFile, const char* toFile,
-                                  bool always)
+bool HandleRelativePathCommand(std::vector<std::string> const& args,
+                               cmExecutionStatus& status)
 {
-  // Collect any properties matching this file name.
-  MatchProperties match_properties =
-    this->CollectMatchProperties(fromFile, false);
-
-  // Skip the file if it is excluded.
-  if(match_properties.Exclude)
-    {
-    return true;
-    }
-
-  // Short-circuit for symbolic links.
-  if(cmSystemTools::FileIsSymlink(fromFile))
-    {
-    return this->InstallSymlink(fromFile, toFile, always);
-    }
-
-  // Determine whether we will copy the file.
-  bool copy = true;
-  if(!always)
-    {
-    // If both files exist and "fromFile" is not newer than "toFile"
-    // do not copy.
-    int timeResult;
-    if(this->FileTimes.FileTimeCompare(fromFile, toFile, &timeResult) &&
-       timeResult <= 0)
-      {
-      copy = false;
-      }
-    }
-
-  // Inform the user about this file installation.
-  std::string message = (copy? "Installing: " : "Up-to-date: ");
-  message += toFile;
-  this->Makefile->DisplayStatus(message.c_str(), -1);
-
-  // Copy the file.
-  if(copy && !cmSystemTools::CopyAFile(fromFile, toFile, true))
-    {
-    cmOStringStream e;
-    e << "INSTALL cannot copy file \"" << fromFile
-      << "\" to \"" << toFile << "\".";
-    this->FileCommand->SetError(e.str().c_str());
+  if (args.size() != 4) {
+    status.SetError("RELATIVE_PATH called with incorrect number of arguments");
     return false;
-    }
-
-  // Add the file to the manifest.
-  this->ManifestAppend(toFile);
-
-  // Set the file modification time of the destination file.
-  if(copy && !always)
-    {
-    cmSystemTools::CopyFileTime(fromFile, toFile);
-    }
-
-  // Set permissions of the destination file.
-  mode_t permissions = (match_properties.Permissions?
-                        match_properties.Permissions : this->FilePermissions);
-  if(!permissions)
-    {
-    // No permissions were explicitly provided but the user requested
-    // that the source file permissions be used.
-    cmSystemTools::GetPermissions(fromFile, permissions);
-    }
-  if(permissions && !cmSystemTools::SetPermissions(toFile, permissions))
-    {
-    cmOStringStream e;
-    e << "Problem setting permissions on file \"" << toFile << "\"";
-    this->FileCommand->SetError(e.str().c_str());
-    return false;
-    }
-
-  return true;
-}
-
-//----------------------------------------------------------------------------
-bool cmFileInstaller::InstallDirectory(const char* source,
-                                       const char* destination,
-                                       bool always)
-{
-  // Collect any properties matching this directory name.
-  MatchProperties match_properties =
-    this->CollectMatchProperties(source, true);
-
-  // Skip the directory if it is excluded.
-  if(match_properties.Exclude)
-    {
-    return true;
-    }
-
-  // Short-circuit for symbolic links.
-  if(cmSystemTools::FileIsSymlink(source))
-    {
-    return this->InstallSymlink(source, destination, always);
-    }
-
-  // Inform the user about this directory installation.
-  std::string message = "Installing: ";
-  message += destination;
-  this->Makefile->DisplayStatus(message.c_str(), -1);
-
-  // Make sure the destination directory exists.
-  if(!cmSystemTools::MakeDirectory(destination))
-    {
-    return false;
-    }
-
-  // Compute the requested permissions for the destination directory.
-  mode_t permissions = (match_properties.Permissions?
-                        match_properties.Permissions : this->DirPermissions);
-  if(!permissions)
-    {
-    // No permissions were explicitly provided but the user requested
-    // that the source directory permissions be used.
-    cmSystemTools::GetPermissions(source, permissions);
-    }
-
-  // Compute the set of permissions required on this directory to
-  // recursively install files and subdirectories safely.
-  mode_t required_permissions =
-    mode_owner_read | mode_owner_write | mode_owner_execute;
-
-  // If the required permissions are specified it is safe to set the
-  // final permissions now.  Otherwise we must add the required
-  // permissions temporarily during file installation.
-  mode_t permissions_before = 0;
-  mode_t permissions_after = 0;
-  if(permissions & required_permissions)
-    {
-    permissions_before = permissions;
-    }
-  else
-    {
-    permissions_before = permissions | required_permissions;
-    permissions_after = permissions;
-    }
-
-  // Set the required permissions of the destination directory.
-  if(permissions_before &&
-     !cmSystemTools::SetPermissions(destination, permissions_before))
-    {
-    cmOStringStream e;
-    e << "Problem setting permissions on directory \""
-      << destination << "\"";
-    this->FileCommand->SetError(e.str().c_str());
-    return false;
-    }
-
-  // Load the directory contents to traverse it recursively.
-  cmsys::Directory dir;
-  if(source && *source)
-    {
-    dir.Load(source);
-    }
-  unsigned long numFiles = static_cast<unsigned long>(dir.GetNumberOfFiles());
-  for(unsigned long fileNum = 0; fileNum < numFiles; ++fileNum)
-    {
-    if(!(strcmp(dir.GetFile(fileNum), ".") == 0 ||
-         strcmp(dir.GetFile(fileNum), "..") == 0))
-      {
-      cmsys_stl::string fromPath = source;
-      fromPath += "/";
-      fromPath += dir.GetFile(fileNum);
-      if(cmSystemTools::FileIsDirectory(fromPath.c_str()))
-        {
-        cmsys_stl::string toDir = destination;
-        toDir += "/";
-        toDir += dir.GetFile(fileNum);
-        if(!this->InstallDirectory(fromPath.c_str(), toDir.c_str(), always))
-          {
-          return false;
-          }
-        }
-      else
-        {
-        // Install this file.
-        std::string toFile = destination;
-        toFile += "/";
-        toFile += dir.GetFile(fileNum);
-        if(!this->InstallFile(fromPath.c_str(), toFile.c_str(), always))
-          {
-          return false;
-          }
-        }
-      }
-    }
-
-  // Set the requested permissions of the destination directory.
-  if(permissions_after &&
-     !cmSystemTools::SetPermissions(destination, permissions_after))
-    {
-    cmOStringStream e;
-    e << "Problem setting permissions on directory \"" << destination << "\"";
-    this->FileCommand->SetError(e.str().c_str());
-    return false;
-    }
-
-  return true;
-}
-
-//----------------------------------------------------------------------------
-void cmFileCommand::HandleInstallPermissions(cmFileInstaller& installer,
-                              mode_t& permissions_file,
-                              mode_t& permissions_dir,
-                              int itype,
-                              bool use_given_permissions_file,
-                              bool use_given_permissions_dir,
-                              bool use_source_permissions) const
-{
-  // Choose a default for shared library permissions.
-  bool install_so_no_exe = this->Makefile->IsOn("CMAKE_INSTALL_SO_NO_EXE");
-  // If file permissions were not specified set default permissions
-  // for this target type.
-  if(!use_given_permissions_file && !use_source_permissions)
-    {
-    switch(itype)
-      {
-      case cmTarget::SHARED_LIBRARY:
-      case cmTarget::MODULE_LIBRARY:
-        if(install_so_no_exe)
-          {
-          // Use read/write permissions.
-          permissions_file = 0;
-          permissions_file |= mode_owner_read;
-          permissions_file |= mode_owner_write;
-          permissions_file |= mode_group_read;
-          permissions_file |= mode_world_read;
-          break;
-          }
-      case cmTarget::EXECUTABLE:
-      case cmTarget::INSTALL_PROGRAMS:
-        // Use read/write/executable permissions.
-        permissions_file = 0;
-        permissions_file |= mode_owner_read;
-        permissions_file |= mode_owner_write;
-        permissions_file |= mode_owner_execute;
-        permissions_file |= mode_group_read;
-        permissions_file |= mode_group_execute;
-        permissions_file |= mode_world_read;
-        permissions_file |= mode_world_execute;
-        break;
-      default:
-        // Use read/write permissions.
-        permissions_file = 0;
-        permissions_file |= mode_owner_read;
-        permissions_file |= mode_owner_write;
-        permissions_file |= mode_group_read;
-        permissions_file |= mode_world_read;
-        break;
-      }
-    }
-
-  // If directory permissions were not specified set default permissions.
-  if(!use_given_permissions_dir && !use_source_permissions)
-    {
-    // Use read/write/executable permissions.
-    permissions_dir = 0;
-    permissions_dir |= mode_owner_read;
-    permissions_dir |= mode_owner_write;
-    permissions_dir |= mode_owner_execute;
-    permissions_dir |= mode_group_read;
-    permissions_dir |= mode_group_execute;
-    permissions_dir |= mode_world_read;
-    permissions_dir |= mode_world_execute;
-    }
-  // Set the installer permissions.
-  installer.FilePermissions = permissions_file;
-  installer.DirPermissions = permissions_dir;
-}
-
-//----------------------------------------------------------------------------
-void cmFileCommand
-::GetTargetTypeFromString(const std::string& stype, int& itype) const
-{
-  if ( stype == "EXECUTABLE" )
-    {
-    itype = cmTarget::EXECUTABLE;
-    }
-  else if ( stype == "PROGRAM" )
-    {
-    itype = cmTarget::INSTALL_PROGRAMS;
-    }
-  else if ( stype == "STATIC_LIBRARY" )
-    {
-    itype = cmTarget::STATIC_LIBRARY;
-    }
-  else if ( stype == "SHARED_LIBRARY" )
-    {
-    itype = cmTarget::SHARED_LIBRARY;
-    }
-  else if ( stype == "MODULE" )
-    {
-    itype = cmTarget::MODULE_LIBRARY;
-    }
-  else if ( stype == "DIRECTORY" )
-    {
-    itype = cmTarget::INSTALL_DIRECTORY;
-    }
-}
-
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleInstallDestination(cmFileInstaller& installer,
-                                             std::string& destination)
-{
-  if ( destination.size() < 2 )
-    {
-    this->SetError("called with inapropriate arguments. "
-        "No DESTINATION provided or .");
-    return false;
-    }
-
-  const char* destdir = cmSystemTools::GetEnv("DESTDIR");
-  if ( destdir && *destdir )
-    {
-    std::string sdestdir = destdir;
-    cmSystemTools::ConvertToUnixSlashes(sdestdir);
-
-    char ch1 = destination[0];
-    char ch2 = destination[1];
-    char ch3 = 0;
-    if ( destination.size() > 2 )
-      {
-      ch3 = destination[2];
-      }
-    int skip = 0;
-    if ( ch1 != '/' )
-      {
-      int relative = 0;
-      if ( ( ch1 >= 'a' && ch1 <= 'z' || ch1 >= 'A' && ch1 <= 'Z' ) &&
-             ch2 == ':' )
-        {
-        // Assume windows
-        // let's do some destdir magic:
-        skip = 2;
-        if ( ch3 != '/' )
-          {
-          relative = 1;
-          }
-        }
-      else
-        {
-        relative = 1;
-        }
-      if ( relative )
-        {
-        // This is relative path on unix or windows. Since we are doing
-        // destdir, this case does not make sense.
-        this->SetError("called with relative DESTINATION. This "
-            "does not make sense when using DESTDIR. Specify "
-            "absolute path or remove DESTDIR environment variable.");
-        return false;
-        }
-      }
-    else
-      {
-      if ( ch2 == '/' )
-        {
-        // looks like a network path.
-        this->SetError("called with network path DESTINATION. This "
-            "does not make sense when using DESTDIR. Specify local "
-            "absolute path or remove DESTDIR environment variable.");
-        return false;
-        }
-      }
-    destination = sdestdir + (destination.c_str() + skip);
-    installer.DestDirLength = int(sdestdir.size());
-    }
-
-  if ( !cmSystemTools::FileExists(destination.c_str()) )
-    {
-    if ( !cmSystemTools::MakeDirectory(destination.c_str()) )
-      {
-      std::string errstring = "cannot create directory: " + destination +
-          ". Maybe need administrative privileges.";
-      this->SetError(errstring.c_str());
-      return false;
-      }
-    }
-  if ( !cmSystemTools::FileIsDirectory(destination.c_str()) )
-    {
-    std::string errstring = "INSTALL destination: " + destination +
-        " is not a directory.";
-    this->SetError(errstring.c_str());
-    return false;
-    }
-  return true;
-}
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleInstallCommand(std::vector<std::string> const& args)
-{
-  if ( args.size() < 6 )
-    {
-    this->SetError("called with incorrect number of arguments");
-    return false;
-    }
-
-  // Construct a file installer object.
-  cmFileInstaller installer(this, this->Makefile);
-
-  std::string rename = "";
-  std::string destination = "";
-
-  std::vector<std::string> files;
-  int itype = cmTarget::INSTALL_FILES;
-
-  std::map<cmStdString, const char*> properties;
-  bool optional = false;
-  bool result = this->ParseInstallArgs(args, installer, properties,
-                                       itype, rename, destination, files,
-                                       optional);
-  if (result == true)
-    {
-    result = this->DoInstall(installer,
-                             itype, rename, destination, files, optional);
-    }
-  return result;
-}
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::ParseInstallArgs(std::vector<std::string> const& args,
-                                cmFileInstaller& installer,
-                                std::map<cmStdString, const char*>& properties,
-                                int& itype,
-                                std::string& rename,
-                                std::string& destination,
-                                std::vector<std::string>& files,
-                                bool& optional)
-{
-    std::string stype = "FILES";
-    bool doing_files = false;
-    bool doing_properties = false;
-    bool doing_permissions_file = false;
-    bool doing_permissions_dir = false;
-    bool doing_permissions_match = false;
-    bool use_given_permissions_file = false;
-    bool use_given_permissions_dir = false;
-    bool use_source_permissions = false;
-    mode_t permissions_file = 0;
-    mode_t permissions_dir = 0;
-
-    cmFileInstaller::MatchRule* current_match_rule = 0;
-    std::vector<std::string>::size_type i = 0;
-    i++; // Get rid of subcommand
-    for ( ; i != args.size(); ++i )
-      {
-      const std::string* cstr = &args[i];
-      if ( *cstr == "DESTINATION" && i < args.size()-1 )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        i++;
-        destination = args[i];
-        doing_files = false;
-        doing_properties = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        }
-      else if ( *cstr == "TYPE" && i < args.size()-1 )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        i++;
-        stype = args[i];
-        if ( args[i+1] == "OPTIONAL" )
-          {
-          i++;
-          optional = true;
-          }
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        }
-      else if ( *cstr == "RENAME" && i < args.size()-1 )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        i++;
-        rename = args[i];
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        }
-      else if ( *cstr == "REGEX" && i < args.size()-1 )
-        {
-        i++;
-        installer.MatchRules.push_back(cmFileInstaller::MatchRule(args[i]));
-        current_match_rule = &*(installer.MatchRules.end()-1);
-        if(!current_match_rule->Regex.is_valid())
-          {
-          cmOStringStream e;
-          e << "INSTALL could not compile REGEX \"" << args[i] << "\".";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        }
-      else if ( *cstr == "EXCLUDE"  )
-        {
-      // Add this property to the current match rule.
-        if(!current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \""
-              << *cstr << "\" before a REGEX is given.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-        current_match_rule->Properties.Exclude = true;
-        doing_permissions_match = true;
-        }
-      else if ( *cstr == "PROPERTIES"  )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        doing_properties = true;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        }
-      else if ( *cstr == "PERMISSIONS" )
-        {
-        if(current_match_rule)
-          {
-          doing_permissions_match = true;
-          doing_permissions_file = false;
-          }
-        else
-          {
-          doing_permissions_match = false;
-          doing_permissions_file = true;
-          use_given_permissions_file = true;
-          }
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_dir = false;
-        }
-      else if ( *cstr == "DIR_PERMISSIONS" )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        use_given_permissions_dir = true;
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = true;
-        }
-      else if ( *cstr == "USE_SOURCE_PERMISSIONS" )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        use_source_permissions = true;
-        }
-      else if ( *cstr == "FILES_MATCHING" )
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        doing_properties = false;
-        doing_files = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        installer.MatchlessFiles = false;
-        }
-      else if ( *cstr == "COMPONENTS"  )
-        {
-        cmOStringStream e;
-        e << "INSTALL called with old-style COMPONENTS argument.  "
-          << "This script was generated with an older version of CMake.  "
-          << "Re-run this cmake version on your build tree.";
-        this->SetError(e.str().c_str());
-        return false;
-        }
-      else if ( *cstr == "CONFIGURATIONS"  )
-        {
-        cmOStringStream e;
-        e << "INSTALL called with old-style CONFIGURATIONS argument.  "
-          << "This script was generated with an older version of CMake.  "
-          << "Re-run this cmake version on your build tree.";
-        this->SetError(e.str().c_str());
-        return false;
-        }
-      else if ( *cstr == "FILES" && !doing_files)
-        {
-        if(current_match_rule)
-          {
-          cmOStringStream e;
-          e << "INSTALL does not allow \"" << *cstr << "\" after REGEX.";
-          this->SetError(e.str().c_str());
-          return false;
-          }
-
-        doing_files = true;
-        doing_properties = false;
-        doing_permissions_file = false;
-        doing_permissions_dir = false;
-        }
-      else if ( doing_properties && i < args.size()-1 )
-        {
-        properties[args[i]] = args[i+1].c_str();
-        i++;
-        }
-      else if ( doing_files )
-        {
-        files.push_back(*cstr);
-        }
-      else if(doing_permissions_file)
-        {
-        if(!installer.CheckPermissions(args[i], permissions_file))
-          {
-          return false;
-          }
-        }
-      else if(doing_permissions_dir)
-        {
-        if(!installer.CheckPermissions(args[i], permissions_dir))
-          {
-          return false;
-          }
-        }
-      else if(doing_permissions_match)
-        {
-        if(!installer.CheckPermissions(
-            args[i], current_match_rule->Properties.Permissions))
-          {
-          return false;
-          }
-        }
-      else
-        {
-        this->SetError("called with inappropriate arguments");
-        return false;
-        }
-      }
-
-    // now check and postprocess what has been parsed
-    if ( files.size() == 0 )
-      {
-      this->SetError(
-                     "called with inapropriate arguments. No FILES provided.");
-      return false;
-      }
-
-    // Check rename form.
-    if(!rename.empty())
-      {
-      if(itype != cmTarget::INSTALL_FILES &&
-         itype != cmTarget::INSTALL_PROGRAMS)
-        {
-        this->SetError("INSTALL option RENAME may be used only with "
-            "FILES or PROGRAMS.");
-        return false;
-        }
-      if(files.size() > 1)
-        {
-        this->SetError("INSTALL option RENAME may be used only with "
-                       "one file.");
-        return false;
-        }
-      }
-
-      if (this->HandleInstallDestination(installer, destination) == false)
-      {
-      return false;
-      }
-
-    if(properties.find("VERSION") != properties.end())
-      {
-      cmOStringStream e;
-      e << "INSTALL called with old-style VERSION property.  "
-        << "This script was generated with an older version of CMake.  "
-        << "Re-run this cmake version on your build tree.";
-      this->SetError(e.str().c_str());
-      return false;
-      }
-    if(properties.find("SOVERSION") != properties.end())
-      {
-      cmOStringStream e;
-      e << "INSTALL called with old-style SOVERSION property.  "
-        << "This script was generated with an older version of CMake.  "
-        << "Re-run this cmake version on your build tree.";
-      this->SetError(e.str().c_str());
-      return false;
-      }
-
-    this->GetTargetTypeFromString(stype, itype);
-
-    this->HandleInstallPermissions(installer,
-                             permissions_file,
-                             permissions_dir,
-                             itype,
-                             use_given_permissions_file,
-                             use_given_permissions_dir,
-                             use_source_permissions);
-
-  return true;
-}
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::DoInstall( cmFileInstaller& installer,
-                              const int itype,
-                              const std::string& rename,
-                              const std::string& destination,
-                              const std::vector<std::string>& files,
-                              const bool optional)
-{
-  typedef std::set<cmStdString>::const_iterator iter_type;
-
-  // Check whether files should be copied always or only if they have
-  // changed.
-  bool copy_always =
-    cmSystemTools::IsOn(cmSystemTools::GetEnv("CMAKE_INSTALL_ALWAYS"));
-
-  // Handle each file listed.
-  for (std::vector<std::string>::size_type i = 0; i < files.size(); i ++ )
-    {
-    // Split the input file into its directory and name components.
-    std::vector<std::string> fromPathComponents;
-    cmSystemTools::SplitPath(files[i].c_str(), fromPathComponents);
-    std::string fromName = *(fromPathComponents.end()-1);
-    std::string fromDir = cmSystemTools::JoinPath(fromPathComponents.begin(),
-                                                  fromPathComponents.end()-1);
-
-    // Compute the full path to the destination file.
-    std::string toFile = destination;
-    std::string const& toName = rename.empty()? fromName : rename;
-    if(!toName.empty())
-      {
-      toFile += "/";
-      toFile += toName;
-      }
-
-    // Construct the full path to the source file.  The file name may
-    // have been changed above.
-    std::string fromFile = fromDir;
-    if(!fromName.empty())
-      {
-      fromFile += "/";
-      fromFile += fromName;
-      }
-
-    std::string message;
-    if(!cmSystemTools::SameFile(fromFile.c_str(), toFile.c_str()))
-      {
-      if(itype == cmTarget::INSTALL_DIRECTORY &&
-         (fromFile.empty() ||
-          cmSystemTools::FileIsDirectory(fromFile.c_str())))
-        {
-        // Try installing this directory.
-        if(!installer.InstallDirectory(fromFile.c_str(), toFile.c_str(),
-                                       copy_always))
-          {
-          return false;
-          }
-        }
-      else if(cmSystemTools::FileExists(fromFile.c_str()))
-        {
-        // Install this file.
-        if(!installer.InstallFile(fromFile.c_str(), toFile.c_str(),
-                                  copy_always))
-          {
-          return false;
-          }
-        }
-      else if(!optional)
-        {
-        // The input file does not exist and installation is not optional.
-        cmOStringStream e;
-        e << "INSTALL cannot find file \"" << fromFile << "\" to install.";
-        this->SetError(e.str().c_str());
-        return false;
-        }
-      }
-    }
-
-  return true;
-}
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleRelativePathCommand(
-  std::vector<std::string> const& args)
-{
-  if(args.size() != 4 )
-    {
-    this->SetError("called with incorrect number of arguments");
-    return false;
-    }
+  }
 
   const std::string& outVar = args[1];
   const std::string& directoryName = args[2];
   const std::string& fileName = args[3];
 
-  if(!cmSystemTools::FileIsFullPath(directoryName.c_str()))
-    {
+  if (!cmSystemTools::FileIsFullPath(directoryName)) {
     std::string errstring =
-      "RelativePath must be passed a full path to the directory: "
-      + directoryName;
-    this->SetError(errstring.c_str());
+      "RELATIVE_PATH must be passed a full path to the directory: " +
+      directoryName;
+    status.SetError(errstring);
     return false;
-    }
-  if(!cmSystemTools::FileIsFullPath(fileName.c_str()))
-    {
+  }
+  if (!cmSystemTools::FileIsFullPath(fileName)) {
     std::string errstring =
-      "RelativePath must be passed a full path to the file: "
-      + fileName;
-    this->SetError(errstring.c_str());
+      "RELATIVE_PATH must be passed a full path to the file: " + fileName;
+    status.SetError(errstring);
     return false;
-    }
+  }
 
-  std::string res = cmSystemTools::RelativePath(directoryName.c_str(),
-                                                fileName.c_str());
-  this->Makefile->AddDefinition(outVar.c_str(),
-    res.c_str());
+  std::string res = cmSystemTools::RelativePath(directoryName, fileName);
+  status.GetMakefile().AddDefinition(outVar, res);
   return true;
 }
 
-
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleRemove(std::vector<std::string> const& args,
-                                 bool recurse)
+bool HandleRename(std::vector<std::string> const& args,
+                  cmExecutionStatus& status)
 {
+  if (args.size() < 3) {
+    status.SetError("RENAME must be called with at least two additional "
+                    "arguments");
+    return false;
+  }
 
-  std::string message;
-  std::vector<std::string>::const_iterator i = args.begin();
+  // Compute full path for old and new names.
+  std::string oldname = args[1];
+  if (!cmsys::SystemTools::FileIsFullPath(oldname)) {
+    oldname =
+      cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', args[1]);
+  }
+  std::string newname = args[2];
+  if (!cmsys::SystemTools::FileIsFullPath(newname)) {
+    newname =
+      cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', args[2]);
+  }
 
-  i++; // Get rid of subcommand
-  for(;i != args.end(); ++i)
-    {
-    if(cmSystemTools::FileIsDirectory(i->c_str()) && recurse)
-      {
-      cmSystemTools::RemoveADirectory(i->c_str());
+  struct Arguments
+  {
+    bool NoReplace = false;
+    std::string Result;
+  };
+
+  static auto const parser = cmArgumentParser<Arguments>{}
+                               .Bind("NO_REPLACE"_s, &Arguments::NoReplace)
+                               .Bind("RESULT"_s, &Arguments::Result);
+
+  std::vector<std::string> unconsumedArgs;
+  Arguments const arguments =
+    parser.Parse(cmMakeRange(args).advance(3), &unconsumedArgs);
+  if (!unconsumedArgs.empty()) {
+    status.SetError("RENAME unknown argument:\n  " + unconsumedArgs.front());
+    return false;
+  }
+
+  std::string err;
+  switch (cmSystemTools::RenameFile(oldname, newname,
+                                    arguments.NoReplace
+                                      ? cmSystemTools::Replace::No
+                                      : cmSystemTools::Replace::Yes,
+                                    &err)) {
+    case cmSystemTools::RenameResult::Success:
+      if (!arguments.Result.empty()) {
+        status.GetMakefile().AddDefinition(arguments.Result, "0");
       }
-    else
-      {
-      cmSystemTools::RemoveFile(i->c_str());
+      return true;
+    case cmSystemTools::RenameResult::NoReplace:
+      if (!arguments.Result.empty()) {
+        err = "NO_REPLACE";
+      } else {
+        err = "path not replaced";
       }
+      CM_FALLTHROUGH;
+    case cmSystemTools::RenameResult::Failure:
+      if (!arguments.Result.empty()) {
+        status.GetMakefile().AddDefinition(arguments.Result, err);
+        return true;
+      }
+      break;
+  }
+  status.SetError(cmStrCat("RENAME failed to rename\n  ", oldname, "\nto\n  ",
+                           newname, "\nbecause: ", err, "\n"));
+  return false;
+}
+
+bool HandleCopyFile(std::vector<std::string> const& args,
+                    cmExecutionStatus& status)
+{
+  if (args.size() < 3) {
+    status.SetError("COPY_FILE must be called with at least two additional "
+                    "arguments");
+    return false;
+  }
+
+  // Compute full path for old and new names.
+  std::string oldname = args[1];
+  if (!cmsys::SystemTools::FileIsFullPath(oldname)) {
+    oldname =
+      cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', args[1]);
+  }
+  std::string newname = args[2];
+  if (!cmsys::SystemTools::FileIsFullPath(newname)) {
+    newname =
+      cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', args[2]);
+  }
+
+  struct Arguments
+  {
+    bool OnlyIfDifferent = false;
+    std::string Result;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("ONLY_IF_DIFFERENT"_s, &Arguments::OnlyIfDifferent)
+      .Bind("RESULT"_s, &Arguments::Result);
+
+  std::vector<std::string> unconsumedArgs;
+  Arguments const arguments =
+    parser.Parse(cmMakeRange(args).advance(3), &unconsumedArgs);
+  if (!unconsumedArgs.empty()) {
+    status.SetError("COPY_FILE unknown argument:\n  " +
+                    unconsumedArgs.front());
+    return false;
+  }
+
+  bool result = true;
+  if (cmsys::SystemTools::FileIsDirectory(oldname)) {
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result,
+                                         "cannot copy a directory");
+    } else {
+      status.SetError(
+        cmStrCat("COPY_FILE cannot copy a directory\n  ", oldname));
+      result = false;
     }
+    return result;
+  }
+  if (cmsys::SystemTools::FileIsDirectory(newname)) {
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result,
+                                         "cannot copy to a directory");
+    } else {
+      status.SetError(
+        cmStrCat("COPY_FILE cannot copy to a directory\n  ", newname));
+      result = false;
+    }
+    return result;
+  }
+
+  cmSystemTools::CopyWhen when;
+  if (arguments.OnlyIfDifferent) {
+    when = cmSystemTools::CopyWhen::OnlyIfDifferent;
+  } else {
+    when = cmSystemTools::CopyWhen::Always;
+  }
+
+  std::string err;
+  if (cmSystemTools::CopySingleFile(oldname, newname, when, &err) ==
+      cmSystemTools::CopyResult::Success) {
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result, "0");
+    }
+  } else {
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result, err);
+    } else {
+      status.SetError(cmStrCat("COPY_FILE failed to copy\n  ", oldname,
+                               "\nto\n  ", newname, "\nbecause: ", err, "\n"));
+      result = false;
+    }
+  }
+
+  return result;
+}
+
+bool HandleRemoveImpl(std::vector<std::string> const& args, bool recurse,
+                      cmExecutionStatus& status)
+{
+  for (std::string const& arg :
+       cmMakeRange(args).advance(1)) // Get rid of subcommand
+  {
+    std::string fileName = arg;
+    if (fileName.empty()) {
+      std::string const r = recurse ? "REMOVE_RECURSE" : "REMOVE";
+      status.GetMakefile().IssueMessage(
+        MessageType::AUTHOR_WARNING, "Ignoring empty file name in " + r + ".");
+      continue;
+    }
+    if (!cmsys::SystemTools::FileIsFullPath(fileName)) {
+      fileName =
+        cmStrCat(status.GetMakefile().GetCurrentSourceDirectory(), '/', arg);
+    }
+
+    if (cmSystemTools::FileIsDirectory(fileName) &&
+        !cmSystemTools::FileIsSymlink(fileName) && recurse) {
+      cmSystemTools::RepeatedRemoveDirectory(fileName);
+    } else {
+      cmSystemTools::RemoveFile(fileName);
+    }
+  }
   return true;
 }
 
-//----------------------------------------------------------------------------
-bool cmFileCommand::HandleCMakePathCommand(std::vector<std::string>
-                                           const& args,
-                                           bool nativePath)
+bool HandleRemove(std::vector<std::string> const& args,
+                  cmExecutionStatus& status)
 {
-  std::vector<std::string>::const_iterator i = args.begin();
-  if(args.size() != 3)
-    {
-    this->SetError("FILE(SYSTEM_PATH ENV result) must be called with "
-                   "only three arguments.");
+  return HandleRemoveImpl(args, false, status);
+}
+
+bool HandleRemoveRecurse(std::vector<std::string> const& args,
+                         cmExecutionStatus& status)
+{
+  return HandleRemoveImpl(args, true, status);
+}
+
+std::string ToNativePath(const std::string& path)
+{
+  const auto& outPath = cmSystemTools::ConvertToOutputPath(path);
+  if (outPath.size() > 1 && outPath.front() == '\"' &&
+      outPath.back() == '\"') {
+    return outPath.substr(1, outPath.size() - 2);
+  }
+  return outPath;
+}
+
+std::string ToCMakePath(const std::string& path)
+{
+  auto temp = path;
+  cmSystemTools::ConvertToUnixSlashes(temp);
+  return temp;
+}
+
+bool HandlePathCommand(std::vector<std::string> const& args,
+                       std::string (*convert)(std::string const&),
+                       cmExecutionStatus& status)
+{
+  if (args.size() != 3) {
+    status.SetError("FILE([TO_CMAKE_PATH|TO_NATIVE_PATH] path result) must be "
+                    "called with exactly three arguments.");
     return false;
-    }
-  i++; // Get rid of subcommand
+  }
 #if defined(_WIN32) && !defined(__CYGWIN__)
   char pathSep = ';';
 #else
   char pathSep = ':';
 #endif
-  std::vector<cmsys::String> path = cmSystemTools::SplitString(i->c_str(),
-                                                             pathSep);
-  i++;
-  const char* var =  i->c_str();
-  std::string value;
-  for(std::vector<cmsys::String>::iterator j = path.begin();
-      j != path.end(); ++j)
-    {
-    if(j != path.begin())
-      {
-      value += ";";
-      }
-    if(!nativePath)
-      {
-      cmSystemTools::ConvertToUnixSlashes(*j);
-      }
-    else
-      {
-      *j = cmSystemTools::ConvertToOutputPath(j->c_str());
-      // remove double quotes in the path
-      cmsys::String& s = *j;
+  std::vector<std::string> path = cmSystemTools::SplitString(args[1], pathSep);
 
-      if(s.size() > 1 && s[0] == '\"' && s[s.size()-1] == '\"')
-        {
-        s = s.substr(1,s.size()-2);
-        }
-      }
-    value += *j;
-    }
-  this->Makefile->AddDefinition(var, value.c_str());
+  std::string value = cmJoin(cmMakeRange(path).transform(convert), ";");
+  status.GetMakefile().AddDefinition(args[2], value);
   return true;
 }
 
+bool HandleCMakePathCommand(std::vector<std::string> const& args,
+                            cmExecutionStatus& status)
+{
+  return HandlePathCommand(args, ToCMakePath, status);
+}
 
+bool HandleNativePathCommand(std::vector<std::string> const& args,
+                             cmExecutionStatus& status)
+{
+  return HandlePathCommand(args, ToNativePath, status);
+}
+
+#if !defined(CMAKE_BOOTSTRAP)
+
+// Stuff for curl download/upload
+using cmFileCommandVectorOfChar = std::vector<char>;
+
+size_t cmWriteToFileCallback(void* ptr, size_t size, size_t nmemb, void* data)
+{
+  int realsize = static_cast<int>(size * nmemb);
+  cmsys::ofstream* fout = static_cast<cmsys::ofstream*>(data);
+  if (fout) {
+    const char* chPtr = static_cast<char*>(ptr);
+    fout->write(chPtr, realsize);
+  }
+  return realsize;
+}
+
+size_t cmWriteToMemoryCallback(void* ptr, size_t size, size_t nmemb,
+                               void* data)
+{
+  int realsize = static_cast<int>(size * nmemb);
+  const char* chPtr = static_cast<char*>(ptr);
+  cm::append(*static_cast<cmFileCommandVectorOfChar*>(data), chPtr,
+             chPtr + realsize);
+  return realsize;
+}
+
+size_t cmFileCommandCurlDebugCallback(CURL*, curl_infotype type, char* chPtr,
+                                      size_t size, void* data)
+{
+  cmFileCommandVectorOfChar& vec =
+    *static_cast<cmFileCommandVectorOfChar*>(data);
+  switch (type) {
+    case CURLINFO_TEXT:
+    case CURLINFO_HEADER_IN:
+    case CURLINFO_HEADER_OUT:
+      cm::append(vec, chPtr, chPtr + size);
+      break;
+    case CURLINFO_DATA_IN:
+    case CURLINFO_DATA_OUT:
+    case CURLINFO_SSL_DATA_IN:
+    case CURLINFO_SSL_DATA_OUT: {
+      char buf[128];
+      int n =
+        snprintf(buf, sizeof(buf), "[%" KWIML_INT_PRIu64 " bytes data]\n",
+                 static_cast<KWIML_INT_uint64_t>(size));
+      if (n > 0) {
+        cm::append(vec, buf, buf + n);
+      }
+    } break;
+    default:
+      break;
+  }
+  return 0;
+}
+
+class cURLProgressHelper
+{
+public:
+  cURLProgressHelper(cmMakefile* mf, const char* text)
+    : Makefile(mf)
+    , Text(text)
+  {
+  }
+
+  bool UpdatePercentage(double value, double total, std::string& status)
+  {
+    long OldPercentage = this->CurrentPercentage;
+
+    if (total > 0.0) {
+      this->CurrentPercentage = std::lround(value / total * 100.0);
+      if (this->CurrentPercentage > 100) {
+        // Avoid extra progress reports for unexpected data beyond total.
+        this->CurrentPercentage = 100;
+      }
+    }
+
+    bool updated = (OldPercentage != this->CurrentPercentage);
+
+    if (updated) {
+      status =
+        cmStrCat("[", this->Text, " ", this->CurrentPercentage, "% complete]");
+    }
+
+    return updated;
+  }
+
+  cmMakefile* GetMakefile() { return this->Makefile; }
+
+private:
+  long CurrentPercentage = -1;
+  cmMakefile* Makefile;
+  std::string Text;
+};
+
+int cmFileDownloadProgressCallback(void* clientp, double dltotal, double dlnow,
+                                   double ultotal, double ulnow)
+{
+  cURLProgressHelper* helper = reinterpret_cast<cURLProgressHelper*>(clientp);
+
+  static_cast<void>(ultotal);
+  static_cast<void>(ulnow);
+
+  std::string status;
+  if (helper->UpdatePercentage(dlnow, dltotal, status)) {
+    cmMakefile* mf = helper->GetMakefile();
+    mf->DisplayStatus(status, -1);
+  }
+
+  return 0;
+}
+
+int cmFileUploadProgressCallback(void* clientp, double dltotal, double dlnow,
+                                 double ultotal, double ulnow)
+{
+  cURLProgressHelper* helper = reinterpret_cast<cURLProgressHelper*>(clientp);
+
+  static_cast<void>(dltotal);
+  static_cast<void>(dlnow);
+
+  std::string status;
+  if (helper->UpdatePercentage(ulnow, ultotal, status)) {
+    cmMakefile* mf = helper->GetMakefile();
+    mf->DisplayStatus(status, -1);
+  }
+
+  return 0;
+}
+
+class cURLEasyGuard
+{
+public:
+  cURLEasyGuard(CURL* easy)
+    : Easy(easy)
+  {
+  }
+
+  ~cURLEasyGuard()
+  {
+    if (this->Easy) {
+      ::curl_easy_cleanup(this->Easy);
+    }
+  }
+
+  cURLEasyGuard(const cURLEasyGuard&) = delete;
+  cURLEasyGuard& operator=(const cURLEasyGuard&) = delete;
+
+  void release() { this->Easy = nullptr; }
+
+private:
+  ::CURL* Easy;
+};
+
+#endif
+
+#define check_curl_result(result, errstr)                                     \
+  do {                                                                        \
+    if (result != CURLE_OK) {                                                 \
+      std::string e(errstr);                                                  \
+      e += ::curl_easy_strerror(result);                                      \
+      status.SetError(e);                                                     \
+      return false;                                                           \
+    }                                                                         \
+  } while (false)
+
+bool HandleDownloadCommand(std::vector<std::string> const& args,
+                           cmExecutionStatus& status)
+{
+#if !defined(CMAKE_BOOTSTRAP)
+  auto i = args.begin();
+  if (args.size() < 2) {
+    status.SetError("DOWNLOAD must be called with at least two arguments.");
+    return false;
+  }
+  ++i; // Get rid of subcommand
+  std::string url = *i;
+  ++i;
+  std::string file;
+
+  long timeout = 0;
+  long inactivity_timeout = 0;
+  std::string logVar;
+  std::string statusVar;
+  bool tls_verify = status.GetMakefile().IsOn("CMAKE_TLS_VERIFY");
+  cmValue cainfo = status.GetMakefile().GetDefinition("CMAKE_TLS_CAINFO");
+  std::string netrc_level =
+    status.GetMakefile().GetSafeDefinition("CMAKE_NETRC");
+  std::string netrc_file =
+    status.GetMakefile().GetSafeDefinition("CMAKE_NETRC_FILE");
+  std::string expectedHash;
+  std::string hashMatchMSG;
+  std::unique_ptr<cmCryptoHash> hash;
+  bool showProgress = false;
+  std::string userpwd;
+
+  std::vector<std::string> curl_headers;
+
+  while (i != args.end()) {
+    if (*i == "TIMEOUT") {
+      ++i;
+      if (i != args.end()) {
+        timeout = atol(i->c_str());
+      } else {
+        status.SetError("DOWNLOAD missing time for TIMEOUT.");
+        return false;
+      }
+    } else if (*i == "INACTIVITY_TIMEOUT") {
+      ++i;
+      if (i != args.end()) {
+        inactivity_timeout = atol(i->c_str());
+      } else {
+        status.SetError("DOWNLOAD missing time for INACTIVITY_TIMEOUT.");
+        return false;
+      }
+    } else if (*i == "LOG") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("DOWNLOAD missing VAR for LOG.");
+        return false;
+      }
+      logVar = *i;
+    } else if (*i == "STATUS") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("DOWNLOAD missing VAR for STATUS.");
+        return false;
+      }
+      statusVar = *i;
+    } else if (*i == "TLS_VERIFY") {
+      ++i;
+      if (i != args.end()) {
+        tls_verify = cmIsOn(*i);
+      } else {
+        status.SetError("DOWNLOAD missing bool value for TLS_VERIFY.");
+        return false;
+      }
+    } else if (*i == "TLS_CAINFO") {
+      ++i;
+      if (i != args.end()) {
+        cainfo = cmValue(*i);
+      } else {
+        status.SetError("DOWNLOAD missing file value for TLS_CAINFO.");
+        return false;
+      }
+    } else if (*i == "NETRC_FILE") {
+      ++i;
+      if (i != args.end()) {
+        netrc_file = *i;
+      } else {
+        status.SetError("DOWNLOAD missing file value for NETRC_FILE.");
+        return false;
+      }
+    } else if (*i == "NETRC") {
+      ++i;
+      if (i != args.end()) {
+        netrc_level = *i;
+      } else {
+        status.SetError("DOWNLOAD missing level value for NETRC.");
+        return false;
+      }
+    } else if (*i == "EXPECTED_MD5") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("DOWNLOAD missing sum value for EXPECTED_MD5.");
+        return false;
+      }
+      hash = cm::make_unique<cmCryptoHash>(cmCryptoHash::AlgoMD5);
+      hashMatchMSG = "MD5 sum";
+      expectedHash = cmSystemTools::LowerCase(*i);
+    } else if (*i == "SHOW_PROGRESS") {
+      showProgress = true;
+    } else if (*i == "EXPECTED_HASH") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("DOWNLOAD missing ALGO=value for EXPECTED_HASH.");
+        return false;
+      }
+      std::string::size_type pos = i->find("=");
+      if (pos == std::string::npos) {
+        std::string err =
+          cmStrCat("DOWNLOAD EXPECTED_HASH expects ALGO=value but got: ", *i);
+        status.SetError(err);
+        return false;
+      }
+      std::string algo = i->substr(0, pos);
+      expectedHash = cmSystemTools::LowerCase(i->substr(pos + 1));
+      hash = std::unique_ptr<cmCryptoHash>(cmCryptoHash::New(algo));
+      if (!hash) {
+        std::string err =
+          cmStrCat("DOWNLOAD EXPECTED_HASH given unknown ALGO: ", algo);
+        status.SetError(err);
+        return false;
+      }
+      hashMatchMSG = algo + " hash";
+    } else if (*i == "USERPWD") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("DOWNLOAD missing string for USERPWD.");
+        return false;
+      }
+      userpwd = *i;
+    } else if (*i == "HTTPHEADER") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("DOWNLOAD missing string for HTTPHEADER.");
+        return false;
+      }
+      curl_headers.push_back(*i);
+    } else if (file.empty()) {
+      file = *i;
+    } else {
+      // Do not return error for compatibility reason.
+      std::string err = cmStrCat("Unexpected argument: ", *i);
+      status.GetMakefile().IssueMessage(MessageType::AUTHOR_WARNING, err);
+    }
+    ++i;
+  }
+  // Can't calculate hash if we don't save the file.
+  // TODO Incrementally calculate hash in the write callback as the file is
+  // being downloaded so this check can be relaxed.
+  if (file.empty() && hash) {
+    status.SetError("DOWNLOAD cannot calculate hash if file is not saved.");
+    return false;
+  }
+  // If file exists already, and caller specified an expected md5 or sha,
+  // and the existing file already has the expected hash, then simply
+  // return.
+  //
+  if (!file.empty() && cmSystemTools::FileExists(file) && hash.get()) {
+    std::string msg;
+    std::string actualHash = hash->HashFile(file);
+    if (actualHash == expectedHash) {
+      msg = cmStrCat("returning early; file already exists with expected ",
+                     hashMatchMSG, '"');
+      if (!statusVar.empty()) {
+        status.GetMakefile().AddDefinition(statusVar, cmStrCat(0, ";\"", msg));
+      }
+      return true;
+    }
+  }
+  // Make sure parent directory exists so we can write to the file
+  // as we receive downloaded bits from curl...
+  //
+  if (!file.empty()) {
+    std::string dir = cmSystemTools::GetFilenamePath(file);
+    if (!dir.empty() && !cmSystemTools::FileExists(dir) &&
+        !cmSystemTools::MakeDirectory(dir)) {
+      std::string errstring = "DOWNLOAD error: cannot create directory '" +
+        dir +
+        "' - Specify file by full path name and verify that you "
+        "have directory creation and file write privileges.";
+      status.SetError(errstring);
+      return false;
+    }
+  }
+
+  cmsys::ofstream fout;
+  if (!file.empty()) {
+    fout.open(file.c_str(), std::ios::binary);
+    if (!fout) {
+      status.SetError("DOWNLOAD cannot open file for write.");
+      return false;
+    }
+  }
+
+  url = cmCurlFixFileURL(url);
+
+  ::CURL* curl;
+  ::curl_global_init(CURL_GLOBAL_DEFAULT);
+  curl = ::curl_easy_init();
+  if (!curl) {
+    status.SetError("DOWNLOAD error initializing curl.");
+    return false;
+  }
+
+  cURLEasyGuard g_curl(curl);
+  ::CURLcode res = ::curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  check_curl_result(res, "DOWNLOAD cannot set url: ");
+
+  // enable HTTP ERROR parsing
+  res = ::curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
+  check_curl_result(res, "DOWNLOAD cannot set http failure option: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/" LIBCURL_VERSION);
+  check_curl_result(res, "DOWNLOAD cannot set user agent option: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, cmWriteToFileCallback);
+  check_curl_result(res, "DOWNLOAD cannot set write function: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION,
+                           cmFileCommandCurlDebugCallback);
+  check_curl_result(res, "DOWNLOAD cannot set debug function: ");
+
+  // check to see if TLS verification is requested
+  if (tls_verify) {
+    res = ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1);
+    check_curl_result(res, "DOWNLOAD cannot set TLS/SSL Verify on: ");
+  } else {
+    res = ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    check_curl_result(res, "DOWNLOAD cannot set TLS/SSL Verify off: ");
+  }
+
+  // check to see if a CAINFO file has been specified
+  // command arg comes first
+  std::string const& cainfo_err = cmCurlSetCAInfo(curl, cainfo);
+  if (!cainfo_err.empty()) {
+    status.SetError(cainfo_err);
+    return false;
+  }
+
+  // check to see if netrc parameters have been specified
+  // local command args takes precedence over CMAKE_NETRC*
+  netrc_level = cmSystemTools::UpperCase(netrc_level);
+  std::string const& netrc_option_err =
+    cmCurlSetNETRCOption(curl, netrc_level, netrc_file);
+  if (!netrc_option_err.empty()) {
+    status.SetError(netrc_option_err);
+    return false;
+  }
+
+  cmFileCommandVectorOfChar chunkDebug;
+
+  res = ::curl_easy_setopt(curl, CURLOPT_WRITEDATA,
+                           file.empty() ? nullptr : &fout);
+  check_curl_result(res, "DOWNLOAD cannot set write data: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_DEBUGDATA, &chunkDebug);
+  check_curl_result(res, "DOWNLOAD cannot set debug data: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  check_curl_result(res, "DOWNLOAD cannot set follow-redirect option: ");
+
+  if (!logVar.empty()) {
+    res = ::curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
+    check_curl_result(res, "DOWNLOAD cannot set verbose: ");
+  }
+
+  if (timeout > 0) {
+    res = ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout);
+    check_curl_result(res, "DOWNLOAD cannot set timeout: ");
+  }
+
+  if (inactivity_timeout > 0) {
+    // Give up if there is no progress for a long time.
+    ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1);
+    ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, inactivity_timeout);
+  }
+
+  // Need the progress helper's scope to last through the duration of
+  // the curl_easy_perform call... so this object is declared at function
+  // scope intentionally, rather than inside the "if(showProgress)"
+  // block...
+  //
+  cURLProgressHelper helper(&status.GetMakefile(), "download");
+
+  if (showProgress) {
+    res = ::curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);
+    check_curl_result(res, "DOWNLOAD cannot set noprogress value: ");
+
+    res = ::curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION,
+                             cmFileDownloadProgressCallback);
+    check_curl_result(res, "DOWNLOAD cannot set progress function: ");
+
+    res = ::curl_easy_setopt(curl, CURLOPT_PROGRESSDATA,
+                             reinterpret_cast<void*>(&helper));
+    check_curl_result(res, "DOWNLOAD cannot set progress data: ");
+  }
+
+  if (!userpwd.empty()) {
+    res = ::curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+    check_curl_result(res, "DOWNLOAD cannot set user password: ");
+  }
+
+  struct curl_slist* headers = nullptr;
+  for (std::string const& h : curl_headers) {
+    headers = ::curl_slist_append(headers, h.c_str());
+  }
+  ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+  res = ::curl_easy_perform(curl);
+
+  ::curl_slist_free_all(headers);
+
+  /* always cleanup */
+  g_curl.release();
+  ::curl_easy_cleanup(curl);
+
+  if (!statusVar.empty()) {
+    status.GetMakefile().AddDefinition(
+      statusVar,
+      cmStrCat(static_cast<int>(res), ";\"", ::curl_easy_strerror(res), "\""));
+  }
+
+  ::curl_global_cleanup();
+
+  // Explicitly flush/close so we can measure the md5 accurately.
+  //
+  if (!file.empty()) {
+    fout.flush();
+    fout.close();
+  }
+
+  // Verify MD5 sum if requested:
+  //
+  if (hash) {
+    std::string actualHash = hash->HashFile(file);
+    if (actualHash.empty()) {
+      status.SetError("DOWNLOAD cannot compute hash on downloaded file");
+      return false;
+    }
+
+    if (expectedHash != actualHash) {
+      if (!statusVar.empty() && res == 0) {
+        status.GetMakefile().AddDefinition(statusVar,
+                                           "1;HASH mismatch: "
+                                           "expected: " +
+                                             expectedHash +
+                                             " actual: " + actualHash);
+      }
+
+      status.SetError(cmStrCat("DOWNLOAD HASH mismatch\n"
+                               "  for file: [",
+                               file,
+                               "]\n"
+                               "    expected hash: [",
+                               expectedHash,
+                               "]\n"
+                               "      actual hash: [",
+                               actualHash,
+                               "]\n"
+                               "           status: [",
+                               static_cast<int>(res), ";\"",
+                               ::curl_easy_strerror(res), "\"]\n"));
+      return false;
+    }
+  }
+
+  if (!logVar.empty()) {
+    chunkDebug.push_back(0);
+    status.GetMakefile().AddDefinition(logVar, chunkDebug.data());
+  }
+
+  return true;
+#else
+  status.SetError("DOWNLOAD not supported by bootstrap cmake.");
+  return false;
+#endif
+}
+
+bool HandleUploadCommand(std::vector<std::string> const& args,
+                         cmExecutionStatus& status)
+{
+#if !defined(CMAKE_BOOTSTRAP)
+  if (args.size() < 3) {
+    status.SetError("UPLOAD must be called with at least three arguments.");
+    return false;
+  }
+  auto i = args.begin();
+  ++i;
+  std::string filename = *i;
+  ++i;
+  std::string url = *i;
+  ++i;
+
+  long timeout = 0;
+  long inactivity_timeout = 0;
+  std::string logVar;
+  std::string statusVar;
+  bool showProgress = false;
+  bool tls_verify = status.GetMakefile().IsOn("CMAKE_TLS_VERIFY");
+  cmValue cainfo = status.GetMakefile().GetDefinition("CMAKE_TLS_CAINFO");
+  std::string userpwd;
+  std::string netrc_level =
+    status.GetMakefile().GetSafeDefinition("CMAKE_NETRC");
+  std::string netrc_file =
+    status.GetMakefile().GetSafeDefinition("CMAKE_NETRC_FILE");
+
+  std::vector<std::string> curl_headers;
+
+  while (i != args.end()) {
+    if (*i == "TIMEOUT") {
+      ++i;
+      if (i != args.end()) {
+        timeout = atol(i->c_str());
+      } else {
+        status.SetError("UPLOAD missing time for TIMEOUT.");
+        return false;
+      }
+    } else if (*i == "INACTIVITY_TIMEOUT") {
+      ++i;
+      if (i != args.end()) {
+        inactivity_timeout = atol(i->c_str());
+      } else {
+        status.SetError("UPLOAD missing time for INACTIVITY_TIMEOUT.");
+        return false;
+      }
+    } else if (*i == "LOG") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("UPLOAD missing VAR for LOG.");
+        return false;
+      }
+      logVar = *i;
+    } else if (*i == "STATUS") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("UPLOAD missing VAR for STATUS.");
+        return false;
+      }
+      statusVar = *i;
+    } else if (*i == "SHOW_PROGRESS") {
+      showProgress = true;
+    } else if (*i == "TLS_VERIFY") {
+      ++i;
+      if (i != args.end()) {
+        tls_verify = cmIsOn(*i);
+      } else {
+        status.SetError("UPLOAD missing bool value for TLS_VERIFY.");
+        return false;
+      }
+    } else if (*i == "TLS_CAINFO") {
+      ++i;
+      if (i != args.end()) {
+        cainfo = cmValue(*i);
+      } else {
+        status.SetError("UPLOAD missing file value for TLS_CAINFO.");
+        return false;
+      }
+    } else if (*i == "NETRC_FILE") {
+      ++i;
+      if (i != args.end()) {
+        netrc_file = *i;
+      } else {
+        status.SetError("UPLOAD missing file value for NETRC_FILE.");
+        return false;
+      }
+    } else if (*i == "NETRC") {
+      ++i;
+      if (i != args.end()) {
+        netrc_level = *i;
+      } else {
+        status.SetError("UPLOAD missing level value for NETRC.");
+        return false;
+      }
+    } else if (*i == "USERPWD") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("UPLOAD missing string for USERPWD.");
+        return false;
+      }
+      userpwd = *i;
+    } else if (*i == "HTTPHEADER") {
+      ++i;
+      if (i == args.end()) {
+        status.SetError("UPLOAD missing string for HTTPHEADER.");
+        return false;
+      }
+      curl_headers.push_back(*i);
+    } else {
+      // Do not return error for compatibility reason.
+      std::string err = cmStrCat("Unexpected argument: ", *i);
+      status.GetMakefile().IssueMessage(MessageType::AUTHOR_WARNING, err);
+    }
+
+    ++i;
+  }
+
+  // Open file for reading:
+  //
+  FILE* fin = cmsys::SystemTools::Fopen(filename, "rb");
+  if (!fin) {
+    std::string errStr =
+      cmStrCat("UPLOAD cannot open file '", filename, "' for reading.");
+    status.SetError(errStr);
+    return false;
+  }
+
+  unsigned long file_size = cmsys::SystemTools::FileLength(filename);
+
+  url = cmCurlFixFileURL(url);
+
+  ::CURL* curl;
+  ::curl_global_init(CURL_GLOBAL_DEFAULT);
+  curl = ::curl_easy_init();
+  if (!curl) {
+    status.SetError("UPLOAD error initializing curl.");
+    fclose(fin);
+    return false;
+  }
+
+  cURLEasyGuard g_curl(curl);
+
+  // enable HTTP ERROR parsing
+  ::CURLcode res = ::curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
+  check_curl_result(res, "UPLOAD cannot set fail on error flag: ");
+
+  // enable uploading
+  res = ::curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
+  check_curl_result(res, "UPLOAD cannot set upload flag: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  check_curl_result(res, "UPLOAD cannot set url: ");
+
+  res =
+    ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, cmWriteToMemoryCallback);
+  check_curl_result(res, "UPLOAD cannot set write function: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION,
+                           cmFileCommandCurlDebugCallback);
+  check_curl_result(res, "UPLOAD cannot set debug function: ");
+
+  // check to see if TLS verification is requested
+  if (tls_verify) {
+    res = ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1);
+    check_curl_result(res, "UPLOAD cannot set TLS/SSL Verify on: ");
+  } else {
+    res = ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    check_curl_result(res, "UPLOAD cannot set TLS/SSL Verify off: ");
+  }
+
+  // check to see if a CAINFO file has been specified
+  // command arg comes first
+  std::string const& cainfo_err = cmCurlSetCAInfo(curl, cainfo);
+  if (!cainfo_err.empty()) {
+    status.SetError(cainfo_err);
+    return false;
+  }
+
+  cmFileCommandVectorOfChar chunkResponse;
+  cmFileCommandVectorOfChar chunkDebug;
+
+  res = ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunkResponse);
+  check_curl_result(res, "UPLOAD cannot set write data: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_DEBUGDATA, &chunkDebug);
+  check_curl_result(res, "UPLOAD cannot set debug data: ");
+
+  res = ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  check_curl_result(res, "UPLOAD cannot set follow-redirect option: ");
+
+  if (!logVar.empty()) {
+    res = ::curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
+    check_curl_result(res, "UPLOAD cannot set verbose: ");
+  }
+
+  if (timeout > 0) {
+    res = ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout);
+    check_curl_result(res, "UPLOAD cannot set timeout: ");
+  }
+
+  if (inactivity_timeout > 0) {
+    // Give up if there is no progress for a long time.
+    ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1);
+    ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, inactivity_timeout);
+  }
+
+  // Need the progress helper's scope to last through the duration of
+  // the curl_easy_perform call... so this object is declared at function
+  // scope intentionally, rather than inside the "if(showProgress)"
+  // block...
+  //
+  cURLProgressHelper helper(&status.GetMakefile(), "upload");
+
+  if (showProgress) {
+    res = ::curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);
+    check_curl_result(res, "UPLOAD cannot set noprogress value: ");
+
+    res = ::curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION,
+                             cmFileUploadProgressCallback);
+    check_curl_result(res, "UPLOAD cannot set progress function: ");
+
+    res = ::curl_easy_setopt(curl, CURLOPT_PROGRESSDATA,
+                             reinterpret_cast<void*>(&helper));
+    check_curl_result(res, "UPLOAD cannot set progress data: ");
+  }
+
+  // now specify which file to upload
+  res = ::curl_easy_setopt(curl, CURLOPT_INFILE, fin);
+  check_curl_result(res, "UPLOAD cannot set input file: ");
+
+  // and give the size of the upload (optional)
+  res =
+    ::curl_easy_setopt(curl, CURLOPT_INFILESIZE, static_cast<long>(file_size));
+  check_curl_result(res, "UPLOAD cannot set input file size: ");
+
+  if (!userpwd.empty()) {
+    res = ::curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+    check_curl_result(res, "UPLOAD cannot set user password: ");
+  }
+
+  // check to see if netrc parameters have been specified
+  // local command args takes precedence over CMAKE_NETRC*
+  netrc_level = cmSystemTools::UpperCase(netrc_level);
+  std::string const& netrc_option_err =
+    cmCurlSetNETRCOption(curl, netrc_level, netrc_file);
+  if (!netrc_option_err.empty()) {
+    status.SetError(netrc_option_err);
+    return false;
+  }
+
+  struct curl_slist* headers = nullptr;
+  for (std::string const& h : curl_headers) {
+    headers = ::curl_slist_append(headers, h.c_str());
+  }
+  ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+  res = ::curl_easy_perform(curl);
+
+  ::curl_slist_free_all(headers);
+
+  /* always cleanup */
+  g_curl.release();
+  ::curl_easy_cleanup(curl);
+
+  if (!statusVar.empty()) {
+    status.GetMakefile().AddDefinition(
+      statusVar,
+      cmStrCat(static_cast<int>(res), ";\"", ::curl_easy_strerror(res), "\""));
+  }
+
+  ::curl_global_cleanup();
+
+  fclose(fin);
+  fin = nullptr;
+
+  if (!logVar.empty()) {
+    std::string log;
+
+    if (!chunkResponse.empty()) {
+      chunkResponse.push_back(0);
+      log += "Response:\n";
+      log += chunkResponse.data();
+      log += "\n";
+    }
+
+    if (!chunkDebug.empty()) {
+      chunkDebug.push_back(0);
+      log += "Debug:\n";
+      log += chunkDebug.data();
+      log += "\n";
+    }
+
+    status.GetMakefile().AddDefinition(logVar, log);
+  }
+
+  return true;
+#else
+  status.SetError("UPLOAD not supported by bootstrap cmake.");
+  return false;
+#endif
+}
+
+void AddEvaluationFile(const std::string& inputName,
+                       const std::string& targetName,
+                       const std::string& outputExpr,
+                       const std::string& condition, bool inputIsContent,
+                       const std::string& newLineCharacter, mode_t permissions,
+                       cmExecutionStatus& status)
+{
+  cmListFileBacktrace lfbt = status.GetMakefile().GetBacktrace();
+
+  cmGeneratorExpression outputGe(lfbt);
+  std::unique_ptr<cmCompiledGeneratorExpression> outputCge =
+    outputGe.Parse(outputExpr);
+
+  cmGeneratorExpression conditionGe(lfbt);
+  std::unique_ptr<cmCompiledGeneratorExpression> conditionCge =
+    conditionGe.Parse(condition);
+
+  status.GetMakefile().AddEvaluationFile(
+    inputName, targetName, std::move(outputCge), std::move(conditionCge),
+    newLineCharacter, permissions, inputIsContent);
+}
+
+bool HandleGenerateCommand(std::vector<std::string> const& args,
+                           cmExecutionStatus& status)
+{
+  if (args.size() < 5) {
+    status.SetError("Incorrect arguments to GENERATE subcommand.");
+    return false;
+  }
+
+  struct Arguments
+  {
+    std::string Output;
+    std::string Input;
+    std::string Content;
+    std::string Condition;
+    std::string Target;
+    std::string NewLineStyle;
+    bool NoSourcePermissions = false;
+    bool UseSourcePermissions = false;
+    std::vector<std::string> FilePermissions;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("OUTPUT"_s, &Arguments::Output)
+      .Bind("INPUT"_s, &Arguments::Input)
+      .Bind("CONTENT"_s, &Arguments::Content)
+      .Bind("CONDITION"_s, &Arguments::Condition)
+      .Bind("TARGET"_s, &Arguments::Target)
+      .Bind("NO_SOURCE_PERMISSIONS"_s, &Arguments::NoSourcePermissions)
+      .Bind("USE_SOURCE_PERMISSIONS"_s, &Arguments::UseSourcePermissions)
+      .Bind("FILE_PERMISSIONS"_s, &Arguments::FilePermissions)
+      .Bind("NEWLINE_STYLE"_s, &Arguments::NewLineStyle);
+
+  std::vector<std::string> unparsedArguments;
+  std::vector<std::string> keywordsMissingValues;
+  std::vector<std::string> parsedKeywords;
+  Arguments const arguments =
+    parser.Parse(cmMakeRange(args).advance(1), &unparsedArguments,
+                 &keywordsMissingValues, &parsedKeywords);
+
+  if (!keywordsMissingValues.empty()) {
+    status.SetError("Incorrect arguments to GENERATE subcommand.");
+    return false;
+  }
+
+  if (!unparsedArguments.empty()) {
+    status.SetError("Unknown argument to GENERATE subcommand.");
+    return false;
+  }
+
+  bool mandatoryOptionsSpecified = false;
+  if (parsedKeywords.size() > 1) {
+    const bool outputOprionSpecified = parsedKeywords[0] == "OUTPUT"_s;
+    const bool inputOrContentSpecified =
+      parsedKeywords[1] == "INPUT"_s || parsedKeywords[1] == "CONTENT"_s;
+    if (outputOprionSpecified && inputOrContentSpecified) {
+      mandatoryOptionsSpecified = true;
+    }
+  }
+  if (!mandatoryOptionsSpecified) {
+    status.SetError("Incorrect arguments to GENERATE subcommand.");
+    return false;
+  }
+
+  const bool conditionOptionSpecified =
+    std::find(parsedKeywords.begin(), parsedKeywords.end(), "CONDITION"_s) !=
+    parsedKeywords.end();
+  if (conditionOptionSpecified && arguments.Condition.empty()) {
+    status.SetError("CONDITION of sub-command GENERATE must not be empty "
+                    "if specified.");
+    return false;
+  }
+
+  const bool targetOptionSpecified =
+    std::find(parsedKeywords.begin(), parsedKeywords.end(), "TARGET"_s) !=
+    parsedKeywords.end();
+  if (targetOptionSpecified && arguments.Target.empty()) {
+    status.SetError("TARGET of sub-command GENERATE must not be empty "
+                    "if specified.");
+    return false;
+  }
+
+  const bool outputOptionSpecified =
+    std::find(parsedKeywords.begin(), parsedKeywords.end(), "OUTPUT"_s) !=
+    parsedKeywords.end();
+  if (outputOptionSpecified && parsedKeywords[0] != "OUTPUT"_s) {
+    status.SetError("Incorrect arguments to GENERATE subcommand.");
+    return false;
+  }
+
+  const bool inputIsContent = parsedKeywords[1] != "INPUT"_s;
+  if (inputIsContent && parsedKeywords[1] != "CONTENT") {
+    status.SetError("Unknown argument to GENERATE subcommand.");
+  }
+
+  const bool newLineStyleSpecified =
+    std::find(parsedKeywords.begin(), parsedKeywords.end(),
+              "NEWLINE_STYLE"_s) != parsedKeywords.end();
+  cmNewLineStyle newLineStyle;
+  if (newLineStyleSpecified) {
+    std::string errorMessage;
+    if (!newLineStyle.ReadFromArguments(args, errorMessage)) {
+      status.SetError(cmStrCat("GENERATE ", errorMessage));
+      return false;
+    }
+  }
+
+  std::string input = arguments.Input;
+  if (inputIsContent) {
+    input = arguments.Content;
+  }
+
+  if (arguments.NoSourcePermissions && arguments.UseSourcePermissions) {
+    status.SetError("given both NO_SOURCE_PERMISSIONS and "
+                    "USE_SOURCE_PERMISSIONS. Only one option allowed.");
+    return false;
+  }
+
+  if (!arguments.FilePermissions.empty()) {
+    if (arguments.NoSourcePermissions) {
+      status.SetError("given both NO_SOURCE_PERMISSIONS and "
+                      "FILE_PERMISSIONS. Only one option allowed.");
+      return false;
+    }
+    if (arguments.UseSourcePermissions) {
+      status.SetError("given both USE_SOURCE_PERMISSIONS and "
+                      "FILE_PERMISSIONS. Only one option allowed.");
+      return false;
+    }
+  }
+
+  if (arguments.UseSourcePermissions) {
+    if (inputIsContent) {
+      status.SetError("given USE_SOURCE_PERMISSIONS without a file INPUT.");
+      return false;
+    }
+  }
+
+  mode_t permissions = 0;
+  if (arguments.NoSourcePermissions) {
+    permissions |= cmFSPermissions::mode_owner_read;
+    permissions |= cmFSPermissions::mode_owner_write;
+    permissions |= cmFSPermissions::mode_group_read;
+    permissions |= cmFSPermissions::mode_world_read;
+  }
+
+  if (!arguments.FilePermissions.empty()) {
+    std::vector<std::string> invalidOptions;
+    for (auto const& e : arguments.FilePermissions) {
+      if (!cmFSPermissions::stringToModeT(e, permissions)) {
+        invalidOptions.push_back(e);
+      }
+    }
+    if (!invalidOptions.empty()) {
+      std::ostringstream oss;
+      oss << "given invalid permission ";
+      for (auto i = 0u; i < invalidOptions.size(); i++) {
+        if (i == 0u) {
+          oss << "\"" << invalidOptions[i] << "\"";
+        } else {
+          oss << ",\"" << invalidOptions[i] << "\"";
+        }
+      }
+      oss << ".";
+      status.SetError(oss.str());
+      return false;
+    }
+  }
+
+  AddEvaluationFile(input, arguments.Target, arguments.Output,
+                    arguments.Condition, inputIsContent,
+                    newLineStyle.GetCharacters(), permissions, status);
+  return true;
+}
+
+bool HandleLockCommand(std::vector<std::string> const& args,
+                       cmExecutionStatus& status)
+{
+#if !defined(CMAKE_BOOTSTRAP)
+  // Default values
+  bool directory = false;
+  bool release = false;
+  enum Guard
+  {
+    GUARD_FUNCTION,
+    GUARD_FILE,
+    GUARD_PROCESS
+  };
+  Guard guard = GUARD_PROCESS;
+  std::string resultVariable;
+  unsigned long timeout = static_cast<unsigned long>(-1);
+
+  // Parse arguments
+  if (args.size() < 2) {
+    status.GetMakefile().IssueMessage(
+      MessageType::FATAL_ERROR,
+      "sub-command LOCK requires at least two arguments.");
+    return false;
+  }
+
+  std::string path = args[1];
+  for (unsigned i = 2; i < args.size(); ++i) {
+    if (args[i] == "DIRECTORY") {
+      directory = true;
+    } else if (args[i] == "RELEASE") {
+      release = true;
+    } else if (args[i] == "GUARD") {
+      ++i;
+      const char* merr = "expected FUNCTION, FILE or PROCESS after GUARD";
+      if (i >= args.size()) {
+        status.GetMakefile().IssueMessage(MessageType::FATAL_ERROR, merr);
+        return false;
+      }
+      if (args[i] == "FUNCTION") {
+        guard = GUARD_FUNCTION;
+      } else if (args[i] == "FILE") {
+        guard = GUARD_FILE;
+      } else if (args[i] == "PROCESS") {
+        guard = GUARD_PROCESS;
+      } else {
+        status.GetMakefile().IssueMessage(
+          MessageType::FATAL_ERROR,
+          cmStrCat(merr, ", but got:\n  \"", args[i], "\"."));
+        return false;
+      }
+
+    } else if (args[i] == "RESULT_VARIABLE") {
+      ++i;
+      if (i >= args.size()) {
+        status.GetMakefile().IssueMessage(
+          MessageType::FATAL_ERROR,
+          "expected variable name after RESULT_VARIABLE");
+        return false;
+      }
+      resultVariable = args[i];
+    } else if (args[i] == "TIMEOUT") {
+      ++i;
+      if (i >= args.size()) {
+        status.GetMakefile().IssueMessage(
+          MessageType::FATAL_ERROR, "expected timeout value after TIMEOUT");
+        return false;
+      }
+      long scanned;
+      if (!cmStrToLong(args[i], &scanned) || scanned < 0) {
+        status.GetMakefile().IssueMessage(
+          MessageType::FATAL_ERROR,
+          cmStrCat("TIMEOUT value \"", args[i],
+                   "\" is not an unsigned integer."));
+        return false;
+      }
+      timeout = static_cast<unsigned long>(scanned);
+    } else {
+      status.GetMakefile().IssueMessage(
+        MessageType::FATAL_ERROR,
+        cmStrCat("expected DIRECTORY, RELEASE, GUARD, RESULT_VARIABLE or ",
+                 "TIMEOUT\nbut got: \"", args[i], "\"."));
+      return false;
+    }
+  }
+
+  if (directory) {
+    path += "/cmake.lock";
+  }
+
+  // Unify path (remove '//', '/../', ...)
+  path = cmSystemTools::CollapseFullPath(
+    path, status.GetMakefile().GetCurrentSourceDirectory());
+
+  // Create file and directories if needed
+  std::string parentDir = cmSystemTools::GetParentDirectory(path);
+  if (!cmSystemTools::MakeDirectory(parentDir)) {
+    status.GetMakefile().IssueMessage(
+      MessageType::FATAL_ERROR,
+      cmStrCat("directory\n  \"", parentDir,
+               "\"\ncreation failed (check permissions)."));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+  FILE* file = cmsys::SystemTools::Fopen(path, "w");
+  if (!file) {
+    status.GetMakefile().IssueMessage(
+      MessageType::FATAL_ERROR,
+      cmStrCat("file\n  \"", path,
+               "\"\ncreation failed (check permissions)."));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+  fclose(file);
+
+  // Actual lock/unlock
+  cmFileLockPool& lockPool =
+    status.GetMakefile().GetGlobalGenerator()->GetFileLockPool();
+
+  cmFileLockResult fileLockResult(cmFileLockResult::MakeOk());
+  if (release) {
+    fileLockResult = lockPool.Release(path);
+  } else {
+    switch (guard) {
+      case GUARD_FUNCTION:
+        fileLockResult = lockPool.LockFunctionScope(path, timeout);
+        break;
+      case GUARD_FILE:
+        fileLockResult = lockPool.LockFileScope(path, timeout);
+        break;
+      case GUARD_PROCESS:
+        fileLockResult = lockPool.LockProcessScope(path, timeout);
+        break;
+      default:
+        cmSystemTools::SetFatalErrorOccured();
+        return false;
+    }
+  }
+
+  const std::string result = fileLockResult.GetOutputMessage();
+
+  if (resultVariable.empty() && !fileLockResult.IsOk()) {
+    status.GetMakefile().IssueMessage(
+      MessageType::FATAL_ERROR,
+      cmStrCat("error locking file\n  \"", path, "\"\n", result, "."));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  if (!resultVariable.empty()) {
+    status.GetMakefile().AddDefinition(resultVariable, result);
+  }
+
+  return true;
+#else
+  static_cast<void>(args);
+  status.SetError("sub-command LOCK not implemented in bootstrap cmake");
+  return false;
+#endif
+}
+
+bool HandleTimestampCommand(std::vector<std::string> const& args,
+                            cmExecutionStatus& status)
+{
+  if (args.size() < 3) {
+    status.SetError("sub-command TIMESTAMP requires at least two arguments.");
+    return false;
+  }
+  if (args.size() > 5) {
+    status.SetError("sub-command TIMESTAMP takes at most four arguments.");
+    return false;
+  }
+
+  unsigned int argsIndex = 1;
+
+  const std::string& filename = args[argsIndex++];
+
+  const std::string& outputVariable = args[argsIndex++];
+
+  std::string formatString;
+  if (args.size() > argsIndex && args[argsIndex] != "UTC") {
+    formatString = args[argsIndex++];
+  }
+
+  bool utcFlag = false;
+  if (args.size() > argsIndex) {
+    if (args[argsIndex] == "UTC") {
+      utcFlag = true;
+    } else {
+      std::string e = " TIMESTAMP sub-command does not recognize option " +
+        args[argsIndex] + ".";
+      status.SetError(e);
+      return false;
+    }
+  }
+
+  cmTimestamp timestamp;
+  std::string result =
+    timestamp.FileModificationTime(filename.c_str(), formatString, utcFlag);
+  status.GetMakefile().AddDefinition(outputVariable, result);
+
+  return true;
+}
+
+bool HandleSizeCommand(std::vector<std::string> const& args,
+                       cmExecutionStatus& status)
+{
+  if (args.size() != 3) {
+    status.SetError(
+      cmStrCat(args[0], " requires a file name and output variable"));
+    return false;
+  }
+
+  unsigned int argsIndex = 1;
+
+  const std::string& filename = args[argsIndex++];
+
+  const std::string& outputVariable = args[argsIndex++];
+
+  if (!cmSystemTools::FileExists(filename, true)) {
+    status.SetError(
+      cmStrCat("SIZE requested of path that is not readable:\n  ", filename));
+    return false;
+  }
+
+  status.GetMakefile().AddDefinition(
+    outputVariable, std::to_string(cmSystemTools::FileLength(filename)));
+
+  return true;
+}
+
+bool HandleReadSymlinkCommand(std::vector<std::string> const& args,
+                              cmExecutionStatus& status)
+{
+  if (args.size() != 3) {
+    status.SetError(
+      cmStrCat(args[0], " requires a file name and output variable"));
+    return false;
+  }
+
+  const std::string& filename = args[1];
+  const std::string& outputVariable = args[2];
+
+  std::string result;
+  if (!cmSystemTools::ReadSymlink(filename, result)) {
+    status.SetError(cmStrCat(
+      "READ_SYMLINK requested of path that is not a symlink:\n  ", filename));
+    return false;
+  }
+
+  status.GetMakefile().AddDefinition(outputVariable, result);
+
+  return true;
+}
+
+bool HandleCreateLinkCommand(std::vector<std::string> const& args,
+                             cmExecutionStatus& status)
+{
+  if (args.size() < 3) {
+    status.SetError("CREATE_LINK must be called with at least two additional "
+                    "arguments");
+    return false;
+  }
+
+  std::string const& fileName = args[1];
+  std::string const& newFileName = args[2];
+
+  struct Arguments
+  {
+    std::string Result;
+    bool CopyOnError = false;
+    bool Symbolic = false;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("RESULT"_s, &Arguments::Result)
+      .Bind("COPY_ON_ERROR"_s, &Arguments::CopyOnError)
+      .Bind("SYMBOLIC"_s, &Arguments::Symbolic);
+
+  std::vector<std::string> unconsumedArgs;
+  Arguments const arguments =
+    parser.Parse(cmMakeRange(args).advance(3), &unconsumedArgs);
+
+  if (!unconsumedArgs.empty()) {
+    status.SetError("unknown argument: \"" + unconsumedArgs.front() + '\"');
+    return false;
+  }
+
+  // The system error message generated in the operation.
+  std::string result;
+
+  // Check if the paths are distinct.
+  if (fileName == newFileName) {
+    result = "CREATE_LINK cannot use same file and newfile";
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result, result);
+      return true;
+    }
+    status.SetError(result);
+    return false;
+  }
+
+  // Hard link requires original file to exist.
+  if (!arguments.Symbolic && !cmSystemTools::FileExists(fileName)) {
+    result = "Cannot hard link \'" + fileName + "\' as it does not exist.";
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result, result);
+      return true;
+    }
+    status.SetError(result);
+    return false;
+  }
+
+  // Check if the new file already exists and remove it.
+  if ((cmSystemTools::FileExists(newFileName) ||
+       cmSystemTools::FileIsSymlink(newFileName)) &&
+      !cmSystemTools::RemoveFile(newFileName)) {
+    std::ostringstream e;
+    e << "Failed to create link '" << newFileName
+      << "' because existing path cannot be removed: "
+      << cmSystemTools::GetLastSystemError() << "\n";
+
+    if (!arguments.Result.empty()) {
+      status.GetMakefile().AddDefinition(arguments.Result, e.str());
+      return true;
+    }
+    status.SetError(e.str());
+    return false;
+  }
+
+  // Whether the operation completed successfully.
+  bool completed = false;
+
+  // Check if the command requires a symbolic link.
+  if (arguments.Symbolic) {
+    completed = static_cast<bool>(
+      cmSystemTools::CreateSymlink(fileName, newFileName, &result));
+  } else {
+    completed = static_cast<bool>(
+      cmSystemTools::CreateLink(fileName, newFileName, &result));
+  }
+
+  // Check if copy-on-error is enabled in the arguments.
+  if (!completed && arguments.CopyOnError) {
+    cmsys::Status copied =
+      cmsys::SystemTools::CopyFileAlways(fileName, newFileName);
+    if (copied) {
+      completed = true;
+    } else {
+      result = "Copy failed: " + copied.GetString();
+    }
+  }
+
+  // Check if the operation was successful.
+  if (completed) {
+    result = "0";
+  } else if (arguments.Result.empty()) {
+    // The operation failed and the result is not reported in a variable.
+    status.SetError(result);
+    return false;
+  }
+
+  if (!arguments.Result.empty()) {
+    status.GetMakefile().AddDefinition(arguments.Result, result);
+  }
+
+  return true;
+}
+
+bool HandleGetRuntimeDependenciesCommand(std::vector<std::string> const& args,
+                                         cmExecutionStatus& status)
+{
+  std::string platform =
+    status.GetMakefile().GetSafeDefinition("CMAKE_HOST_SYSTEM_NAME");
+  if (!cmRuntimeDependencyArchive::PlatformSupportsRuntimeDependencies(
+        platform)) {
+    status.SetError(
+      cmStrCat("GET_RUNTIME_DEPENDENCIES is not supported on system \"",
+               platform, "\""));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  if (status.GetMakefile().GetState()->GetMode() == cmState::Project) {
+    status.GetMakefile().IssueMessage(
+      MessageType::AUTHOR_WARNING,
+      "You have used file(GET_RUNTIME_DEPENDENCIES)"
+      " in project mode. This is probably not what "
+      "you intended to do. Instead, please consider"
+      " using it in an install(CODE) or "
+      "install(SCRIPT) command. For example:"
+      "\n  install(CODE [["
+      "\n    file(GET_RUNTIME_DEPENDENCIES"
+      "\n      # ..."
+      "\n      )"
+      "\n    ]])");
+  }
+
+  struct Arguments
+  {
+    std::string ResolvedDependenciesVar;
+    std::string UnresolvedDependenciesVar;
+    std::string ConflictingDependenciesPrefix;
+    std::string RPathPrefix;
+    std::string BundleExecutable;
+    std::vector<std::string> Executables;
+    std::vector<std::string> Libraries;
+    std::vector<std::string> Directories;
+    std::vector<std::string> Modules;
+    std::vector<std::string> PreIncludeRegexes;
+    std::vector<std::string> PreExcludeRegexes;
+    std::vector<std::string> PostIncludeRegexes;
+    std::vector<std::string> PostExcludeRegexes;
+    std::vector<std::string> PostIncludeFiles;
+    std::vector<std::string> PostExcludeFiles;
+    std::vector<std::string> PostExcludeFilesStrict;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("RESOLVED_DEPENDENCIES_VAR"_s, &Arguments::ResolvedDependenciesVar)
+      .Bind("UNRESOLVED_DEPENDENCIES_VAR"_s,
+            &Arguments::UnresolvedDependenciesVar)
+      .Bind("CONFLICTING_DEPENDENCIES_PREFIX"_s,
+            &Arguments::ConflictingDependenciesPrefix)
+      .Bind("RPATH_PREFIX"_s, &Arguments::RPathPrefix)
+      .Bind("BUNDLE_EXECUTABLE"_s, &Arguments::BundleExecutable)
+      .Bind("EXECUTABLES"_s, &Arguments::Executables)
+      .Bind("LIBRARIES"_s, &Arguments::Libraries)
+      .Bind("MODULES"_s, &Arguments::Modules)
+      .Bind("DIRECTORIES"_s, &Arguments::Directories)
+      .Bind("PRE_INCLUDE_REGEXES"_s, &Arguments::PreIncludeRegexes)
+      .Bind("PRE_EXCLUDE_REGEXES"_s, &Arguments::PreExcludeRegexes)
+      .Bind("POST_INCLUDE_REGEXES"_s, &Arguments::PostIncludeRegexes)
+      .Bind("POST_EXCLUDE_REGEXES"_s, &Arguments::PostExcludeRegexes)
+      .Bind("POST_INCLUDE_FILES"_s, &Arguments::PostIncludeFiles)
+      .Bind("POST_EXCLUDE_FILES"_s, &Arguments::PostExcludeFiles)
+      .Bind("POST_EXCLUDE_FILES_STRICT"_s, &Arguments::PostExcludeFilesStrict);
+
+  std::vector<std::string> unrecognizedArguments;
+  std::vector<std::string> keywordsMissingValues;
+  auto parsedArgs =
+    parser.Parse(cmMakeRange(args).advance(1), &unrecognizedArguments,
+                 &keywordsMissingValues);
+  auto argIt = unrecognizedArguments.begin();
+  if (argIt != unrecognizedArguments.end()) {
+    status.SetError(cmStrCat("Unrecognized argument: \"", *argIt, "\""));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  const std::vector<std::string> LIST_ARGS = {
+    "DIRECTORIES",
+    "EXECUTABLES",
+    "LIBRARIES",
+    "MODULES",
+    "POST_EXCLUDE_FILES",
+    "POST_EXCLUDE_FILES_STRICT",
+    "POST_EXCLUDE_REGEXES",
+    "POST_INCLUDE_FILES",
+    "POST_INCLUDE_REGEXES",
+    "PRE_EXCLUDE_REGEXES",
+    "PRE_INCLUDE_REGEXES",
+  };
+  auto kwbegin = keywordsMissingValues.cbegin();
+  auto kwend = cmRemoveMatching(keywordsMissingValues, LIST_ARGS);
+  if (kwend != kwbegin) {
+    status.SetError(cmStrCat("Keywords missing values:\n  ",
+                             cmJoin(cmMakeRange(kwbegin, kwend), "\n  ")));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  cmRuntimeDependencyArchive archive(
+    status, parsedArgs.Directories, parsedArgs.BundleExecutable,
+    parsedArgs.PreIncludeRegexes, parsedArgs.PreExcludeRegexes,
+    parsedArgs.PostIncludeRegexes, parsedArgs.PostExcludeRegexes,
+    std::move(parsedArgs.PostIncludeFiles),
+    std::move(parsedArgs.PostExcludeFiles),
+    std::move(parsedArgs.PostExcludeFilesStrict));
+  if (!archive.Prepare()) {
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  if (!archive.GetRuntimeDependencies(
+        parsedArgs.Executables, parsedArgs.Libraries, parsedArgs.Modules)) {
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  std::vector<std::string> deps;
+  std::vector<std::string> unresolvedDeps;
+  std::vector<std::string> conflictingDeps;
+  for (auto const& val : archive.GetResolvedPaths()) {
+    bool unique = true;
+    auto it = val.second.begin();
+    assert(it != val.second.end());
+    auto const& firstPath = *it;
+    while (++it != val.second.end()) {
+      if (!cmSystemTools::SameFile(firstPath, *it)) {
+        unique = false;
+        break;
+      }
+    }
+
+    if (unique) {
+      deps.push_back(firstPath);
+      if (!parsedArgs.RPathPrefix.empty()) {
+        status.GetMakefile().AddDefinition(
+          parsedArgs.RPathPrefix + "_" + firstPath,
+          cmJoin(archive.GetRPaths().at(firstPath), ";"));
+      }
+    } else if (!parsedArgs.ConflictingDependenciesPrefix.empty()) {
+      conflictingDeps.push_back(val.first);
+      std::vector<std::string> paths;
+      paths.insert(paths.begin(), val.second.begin(), val.second.end());
+      std::string varName =
+        parsedArgs.ConflictingDependenciesPrefix + "_" + val.first;
+      std::string pathsStr = cmJoin(paths, ";");
+      status.GetMakefile().AddDefinition(varName, pathsStr);
+    } else {
+      std::ostringstream e;
+      e << "Multiple conflicting paths found for " << val.first << ":";
+      for (auto const& path : val.second) {
+        e << "\n  " << path;
+      }
+      status.SetError(e.str());
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+  if (!archive.GetUnresolvedPaths().empty()) {
+    if (!parsedArgs.UnresolvedDependenciesVar.empty()) {
+      unresolvedDeps.insert(unresolvedDeps.begin(),
+                            archive.GetUnresolvedPaths().begin(),
+                            archive.GetUnresolvedPaths().end());
+    } else {
+      std::ostringstream e;
+      e << "Could not resolve runtime dependencies:";
+      for (auto const& path : archive.GetUnresolvedPaths()) {
+        e << "\n  " << path;
+      }
+      status.SetError(e.str());
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+
+  if (!parsedArgs.ResolvedDependenciesVar.empty()) {
+    std::string val = cmJoin(deps, ";");
+    status.GetMakefile().AddDefinition(parsedArgs.ResolvedDependenciesVar,
+                                       val);
+  }
+  if (!parsedArgs.UnresolvedDependenciesVar.empty()) {
+    std::string val = cmJoin(unresolvedDeps, ";");
+    status.GetMakefile().AddDefinition(parsedArgs.UnresolvedDependenciesVar,
+                                       val);
+  }
+  if (!parsedArgs.ConflictingDependenciesPrefix.empty()) {
+    std::string val = cmJoin(conflictingDeps, ";");
+    status.GetMakefile().AddDefinition(
+      parsedArgs.ConflictingDependenciesPrefix + "_FILENAMES", val);
+  }
+  return true;
+}
+
+bool HandleConfigureCommand(std::vector<std::string> const& args,
+                            cmExecutionStatus& status)
+{
+  struct Arguments
+  {
+    std::string Output;
+    std::string Content;
+    bool EscapeQuotes = false;
+    bool AtOnly = false;
+    std::string NewlineStyle;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("OUTPUT"_s, &Arguments::Output)
+      .Bind("CONTENT"_s, &Arguments::Content)
+      .Bind("ESCAPE_QUOTES"_s, &Arguments::EscapeQuotes)
+      .Bind("@ONLY"_s, &Arguments::AtOnly)
+      .Bind("NEWLINE_STYLE"_s, &Arguments::NewlineStyle);
+
+  std::vector<std::string> unrecognizedArguments;
+  std::vector<std::string> keywordsMissingArguments;
+  std::vector<std::string> parsedKeywords;
+  auto parsedArgs =
+    parser.Parse(cmMakeRange(args).advance(1), &unrecognizedArguments,
+                 &keywordsMissingArguments, &parsedKeywords);
+
+  auto argIt = unrecognizedArguments.begin();
+  if (argIt != unrecognizedArguments.end()) {
+    status.SetError(
+      cmStrCat("CONFIGURE Unrecognized argument: \"", *argIt, "\""));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  std::vector<std::string> mandatoryOptions{ "OUTPUT", "CONTENT" };
+  for (auto const& e : mandatoryOptions) {
+    const bool optionHasNoValue =
+      std::find(keywordsMissingArguments.begin(),
+                keywordsMissingArguments.end(),
+                e) != keywordsMissingArguments.end();
+    if (optionHasNoValue) {
+      status.SetError(cmStrCat("CONFIGURE ", e, " option needs a value."));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+
+  for (auto const& e : mandatoryOptions) {
+    const bool optionGiven =
+      std::find(parsedKeywords.begin(), parsedKeywords.end(), e) !=
+      parsedKeywords.end();
+    if (!optionGiven) {
+      status.SetError(cmStrCat("CONFIGURE ", e, " option is mandatory."));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+
+  std::string errorMessage;
+  cmNewLineStyle newLineStyle;
+  if (!newLineStyle.ReadFromArguments(args, errorMessage)) {
+    status.SetError(cmStrCat("CONFIGURE ", errorMessage));
+    return false;
+  }
+
+  // Check for generator expressions
+  std::string outputFile = cmSystemTools::CollapseFullPath(
+    parsedArgs.Output, status.GetMakefile().GetCurrentBinaryDirectory());
+
+  std::string::size_type pos = outputFile.find_first_of("<>");
+  if (pos != std::string::npos) {
+    status.SetError(cmStrCat("CONFIGURE called with OUTPUT containing a \"",
+                             outputFile[pos],
+                             "\".  This character is not allowed."));
+    return false;
+  }
+
+  cmMakefile& makeFile = status.GetMakefile();
+  if (!makeFile.CanIWriteThisFile(outputFile)) {
+    cmSystemTools::Error("Attempt to write file: " + outputFile +
+                         " into a source directory.");
+    return false;
+  }
+
+  cmSystemTools::ConvertToUnixSlashes(outputFile);
+
+  // Re-generate if non-temporary outputs are missing.
+  // when we finalize the configuration we will remove all
+  // output files that now don't exist.
+  makeFile.AddCMakeOutputFile(outputFile);
+
+  // Create output directory
+  const std::string::size_type slashPos = outputFile.rfind('/');
+  if (slashPos != std::string::npos) {
+    const std::string path = outputFile.substr(0, slashPos);
+    cmSystemTools::MakeDirectory(path);
+  }
+
+  std::string newLineCharacters = "\n";
+  bool open_with_binary_flag = false;
+  if (newLineStyle.IsValid()) {
+    newLineCharacters = newLineStyle.GetCharacters();
+    open_with_binary_flag = true;
+  }
+
+  cmGeneratedFileStream fout;
+  fout.Open(outputFile, false, open_with_binary_flag);
+  if (!fout) {
+    cmSystemTools::Error("Could not open file for write in copy operation " +
+                         outputFile);
+    cmSystemTools::ReportLastSystemError("");
+    return false;
+  }
+  fout.SetCopyIfDifferent(true);
+
+  // copy input to output and expand variables from input at the same time
+  std::stringstream sin(parsedArgs.Content, std::ios::in);
+  std::string inLine;
+  std::string outLine;
+  bool hasNewLine = false;
+  while (cmSystemTools::GetLineFromStream(sin, inLine, &hasNewLine)) {
+    outLine.clear();
+    makeFile.ConfigureString(inLine, outLine, parsedArgs.AtOnly,
+                             parsedArgs.EscapeQuotes);
+    fout << outLine;
+    if (hasNewLine || newLineStyle.IsValid()) {
+      fout << newLineCharacters;
+    }
+  }
+
+  // close file before attempting to copy
+  fout.close();
+
+  return true;
+}
+
+bool HandleArchiveCreateCommand(std::vector<std::string> const& args,
+                                cmExecutionStatus& status)
+{
+  struct Arguments
+  {
+    std::string Output;
+    std::string Format;
+    std::string Compression;
+    std::string CompressionLevel;
+    std::string MTime;
+    bool Verbose = false;
+    std::vector<std::string> Paths;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("OUTPUT"_s, &Arguments::Output)
+      .Bind("FORMAT"_s, &Arguments::Format)
+      .Bind("COMPRESSION"_s, &Arguments::Compression)
+      .Bind("COMPRESSION_LEVEL"_s, &Arguments::CompressionLevel)
+      .Bind("MTIME"_s, &Arguments::MTime)
+      .Bind("VERBOSE"_s, &Arguments::Verbose)
+      .Bind("PATHS"_s, &Arguments::Paths);
+
+  std::vector<std::string> unrecognizedArguments;
+  std::vector<std::string> keywordsMissingValues;
+  auto parsedArgs =
+    parser.Parse(cmMakeRange(args).advance(1), &unrecognizedArguments,
+                 &keywordsMissingValues);
+  auto argIt = unrecognizedArguments.begin();
+  if (argIt != unrecognizedArguments.end()) {
+    status.SetError(cmStrCat("Unrecognized argument: \"", *argIt, "\""));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  const std::vector<std::string> LIST_ARGS = {
+    "OUTPUT", "FORMAT", "COMPRESSION", "COMPRESSION_LEVEL", "MTIME", "PATHS"
+  };
+  auto kwbegin = keywordsMissingValues.cbegin();
+  auto kwend = cmRemoveMatching(keywordsMissingValues, LIST_ARGS);
+  if (kwend != kwbegin) {
+    status.SetError(cmStrCat("Keywords missing values:\n  ",
+                             cmJoin(cmMakeRange(kwbegin, kwend), "\n  ")));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  const char* knownFormats[] = {
+    "7zip", "gnutar", "pax", "paxr", "raw", "zip"
+  };
+
+  if (!parsedArgs.Format.empty() &&
+      !cm::contains(knownFormats, parsedArgs.Format)) {
+    status.SetError(
+      cmStrCat("archive format ", parsedArgs.Format, " not supported"));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  const char* zipFileFormats[] = { "7zip", "zip" };
+  if (!parsedArgs.Compression.empty() &&
+      cm::contains(zipFileFormats, parsedArgs.Format)) {
+    status.SetError(cmStrCat("archive format ", parsedArgs.Format,
+                             " does not support COMPRESSION arguments"));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  static std::map<std::string, cmSystemTools::cmTarCompression>
+    compressionTypeMap = { { "None", cmSystemTools::TarCompressNone },
+                           { "BZip2", cmSystemTools::TarCompressBZip2 },
+                           { "GZip", cmSystemTools::TarCompressGZip },
+                           { "XZ", cmSystemTools::TarCompressXZ },
+                           { "Zstd", cmSystemTools::TarCompressZstd } };
+
+  cmSystemTools::cmTarCompression compress = cmSystemTools::TarCompressNone;
+  auto typeIt = compressionTypeMap.find(parsedArgs.Compression);
+  if (typeIt != compressionTypeMap.end()) {
+    compress = typeIt->second;
+  } else if (!parsedArgs.Compression.empty()) {
+    status.SetError(cmStrCat("compression type ", parsedArgs.Compression,
+                             " is not supported"));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  int compressionLevel = 0;
+  if (!parsedArgs.CompressionLevel.empty()) {
+    if (parsedArgs.CompressionLevel.size() != 1 &&
+        !std::isdigit(parsedArgs.CompressionLevel[0])) {
+      status.SetError(cmStrCat("compression level ",
+                               parsedArgs.CompressionLevel,
+                               " should be in range 0 to 9"));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+    compressionLevel = std::stoi(parsedArgs.CompressionLevel);
+    if (compressionLevel < 0 || compressionLevel > 9) {
+      status.SetError(cmStrCat("compression level ",
+                               parsedArgs.CompressionLevel,
+                               " should be in range 0 to 9"));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+    if (compress == cmSystemTools::TarCompressNone) {
+      status.SetError(cmStrCat("compression level is not supported for "
+                               "compression \"None\"",
+                               parsedArgs.Compression));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+
+  if (parsedArgs.Paths.empty()) {
+    status.SetError("ARCHIVE_CREATE requires a non-empty list of PATHS");
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  if (!cmSystemTools::CreateTar(parsedArgs.Output, parsedArgs.Paths, compress,
+                                parsedArgs.Verbose, parsedArgs.MTime,
+                                parsedArgs.Format, compressionLevel)) {
+    status.SetError(cmStrCat("failed to compress: ", parsedArgs.Output));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  return true;
+}
+
+bool HandleArchiveExtractCommand(std::vector<std::string> const& args,
+                                 cmExecutionStatus& status)
+{
+  struct Arguments
+  {
+    std::string Input;
+    bool Verbose = false;
+    bool ListOnly = false;
+    std::string Destination;
+    std::vector<std::string> Patterns;
+  };
+
+  static auto const parser = cmArgumentParser<Arguments>{}
+                               .Bind("INPUT"_s, &Arguments::Input)
+                               .Bind("VERBOSE"_s, &Arguments::Verbose)
+                               .Bind("LIST_ONLY"_s, &Arguments::ListOnly)
+                               .Bind("DESTINATION"_s, &Arguments::Destination)
+                               .Bind("PATTERNS"_s, &Arguments::Patterns);
+
+  std::vector<std::string> unrecognizedArguments;
+  std::vector<std::string> keywordsMissingValues;
+  auto parsedArgs =
+    parser.Parse(cmMakeRange(args).advance(1), &unrecognizedArguments,
+                 &keywordsMissingValues);
+  auto argIt = unrecognizedArguments.begin();
+  if (argIt != unrecognizedArguments.end()) {
+    status.SetError(cmStrCat("Unrecognized argument: \"", *argIt, "\""));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  const std::vector<std::string> LIST_ARGS = { "INPUT", "DESTINATION",
+                                               "PATTERNS" };
+  auto kwbegin = keywordsMissingValues.cbegin();
+  auto kwend = cmRemoveMatching(keywordsMissingValues, LIST_ARGS);
+  if (kwend != kwbegin) {
+    status.SetError(cmStrCat("Keywords missing values:\n  ",
+                             cmJoin(cmMakeRange(kwbegin, kwend), "\n  ")));
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  std::string inFile = parsedArgs.Input;
+
+  if (parsedArgs.ListOnly) {
+    if (!cmSystemTools::ListTar(inFile, parsedArgs.Patterns,
+                                parsedArgs.Verbose)) {
+      status.SetError(cmStrCat("failed to list: ", inFile));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  } else {
+    std::string destDir = status.GetMakefile().GetCurrentBinaryDirectory();
+    if (!parsedArgs.Destination.empty()) {
+      if (cmSystemTools::FileIsFullPath(parsedArgs.Destination)) {
+        destDir = parsedArgs.Destination;
+      } else {
+        destDir = cmStrCat(destDir, "/", parsedArgs.Destination);
+      }
+
+      if (!cmSystemTools::MakeDirectory(destDir)) {
+        status.SetError(cmStrCat("failed to create directory: ", destDir));
+        cmSystemTools::SetFatalErrorOccured();
+        return false;
+      }
+
+      if (!cmSystemTools::FileIsFullPath(inFile)) {
+        inFile =
+          cmStrCat(cmSystemTools::GetCurrentWorkingDirectory(), "/", inFile);
+      }
+    }
+
+    cmWorkingDirectory workdir(destDir);
+    if (workdir.Failed()) {
+      status.SetError(
+        cmStrCat("failed to change working directory to: ", destDir));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+
+    if (!cmSystemTools::ExtractTar(inFile, parsedArgs.Patterns,
+                                   parsedArgs.Verbose)) {
+      status.SetError(cmStrCat("failed to extract: ", inFile));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool ValidateAndConvertPermissions(const std::vector<std::string>& permissions,
+                                   mode_t& perms, cmExecutionStatus& status)
+{
+  for (const auto& i : permissions) {
+    if (!cmFSPermissions::stringToModeT(i, perms)) {
+      status.SetError(i + " is an invalid permission specifier");
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SetPermissions(const std::string& filename, const mode_t& perms,
+                    cmExecutionStatus& status)
+{
+  if (!cmSystemTools::SetPermissions(filename, perms)) {
+    status.SetError("Failed to set permissions for " + filename);
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+  return true;
+}
+
+bool HandleChmodCommandImpl(std::vector<std::string> const& args, bool recurse,
+                            cmExecutionStatus& status)
+{
+  mode_t perms = 0;
+  mode_t fperms = 0;
+  mode_t dperms = 0;
+  cmsys::Glob globber;
+
+  globber.SetRecurse(recurse);
+  globber.SetRecurseListDirs(recurse);
+
+  struct Arguments
+  {
+    std::vector<std::string> Permissions;
+    std::vector<std::string> FilePermissions;
+    std::vector<std::string> DirectoryPermissions;
+  };
+
+  static auto const parser =
+    cmArgumentParser<Arguments>{}
+      .Bind("PERMISSIONS"_s, &Arguments::Permissions)
+      .Bind("FILE_PERMISSIONS"_s, &Arguments::FilePermissions)
+      .Bind("DIRECTORY_PERMISSIONS"_s, &Arguments::DirectoryPermissions);
+
+  std::vector<std::string> pathEntries;
+  std::vector<std::string> keywordsMissingValues;
+  Arguments parsedArgs = parser.Parse(cmMakeRange(args).advance(1),
+                                      &pathEntries, &keywordsMissingValues);
+
+  // check validity of arguments
+  if (parsedArgs.Permissions.empty() && parsedArgs.FilePermissions.empty() &&
+      parsedArgs.DirectoryPermissions.empty()) // no permissions given
+  {
+    status.SetError("No permissions given");
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  if (!parsedArgs.Permissions.empty() && !parsedArgs.FilePermissions.empty() &&
+      !parsedArgs.DirectoryPermissions.empty()) // all keywords are used
+  {
+    status.SetError("Remove either PERMISSIONS or FILE_PERMISSIONS or "
+                    "DIRECTORY_PERMISSIONS from the invocation");
+    cmSystemTools::SetFatalErrorOccured();
+    return false;
+  }
+
+  if (!keywordsMissingValues.empty()) {
+    for (const auto& i : keywordsMissingValues) {
+      status.SetError(i + " is not given any arguments");
+      cmSystemTools::SetFatalErrorOccured();
+    }
+    return false;
+  }
+
+  // validate permissions
+  bool validatePermissions =
+    ValidateAndConvertPermissions(parsedArgs.Permissions, perms, status) &&
+    ValidateAndConvertPermissions(parsedArgs.FilePermissions, fperms,
+                                  status) &&
+    ValidateAndConvertPermissions(parsedArgs.DirectoryPermissions, dperms,
+                                  status);
+  if (!validatePermissions) {
+    return false;
+  }
+
+  std::vector<std::string> allPathEntries;
+
+  if (recurse) {
+    std::vector<std::string> tempPathEntries;
+    for (const auto& i : pathEntries) {
+      if (cmSystemTools::FileIsDirectory(i)) {
+        globber.FindFiles(i + "/*");
+        tempPathEntries = globber.GetFiles();
+        allPathEntries.insert(allPathEntries.end(), tempPathEntries.begin(),
+                              tempPathEntries.end());
+        allPathEntries.emplace_back(i);
+      } else {
+        allPathEntries.emplace_back(i); // We validate path entries below
+      }
+    }
+  } else {
+    allPathEntries = std::move(pathEntries);
+  }
+
+  // chmod
+  for (const auto& i : allPathEntries) {
+    if (!(cmSystemTools::FileExists(i) || cmSystemTools::FileIsDirectory(i))) {
+      status.SetError(cmStrCat("does not exist:\n  ", i));
+      cmSystemTools::SetFatalErrorOccured();
+      return false;
+    }
+
+    if (cmSystemTools::FileExists(i, true)) {
+      bool success = true;
+      const mode_t& filePermissions =
+        parsedArgs.FilePermissions.empty() ? perms : fperms;
+      if (filePermissions) {
+        success = SetPermissions(i, filePermissions, status);
+      }
+      if (!success) {
+        return false;
+      }
+    }
+
+    else if (cmSystemTools::FileIsDirectory(i)) {
+      bool success = true;
+      const mode_t& directoryPermissions =
+        parsedArgs.DirectoryPermissions.empty() ? perms : dperms;
+      if (directoryPermissions) {
+        success = SetPermissions(i, directoryPermissions, status);
+      }
+      if (!success) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+bool HandleChmodCommand(std::vector<std::string> const& args,
+                        cmExecutionStatus& status)
+{
+  return HandleChmodCommandImpl(args, false, status);
+}
+
+bool HandleChmodRecurseCommand(std::vector<std::string> const& args,
+                               cmExecutionStatus& status)
+{
+  return HandleChmodCommandImpl(args, true, status);
+}
+
+} // namespace
+
+bool cmFileCommand(std::vector<std::string> const& args,
+                   cmExecutionStatus& status)
+{
+  if (args.size() < 2) {
+    status.SetError("must be called with at least two arguments.");
+    return false;
+  }
+
+  static cmSubcommandTable const subcommand{
+    { "WRITE"_s, HandleWriteCommand },
+    { "APPEND"_s, HandleAppendCommand },
+    { "DOWNLOAD"_s, HandleDownloadCommand },
+    { "UPLOAD"_s, HandleUploadCommand },
+    { "READ"_s, HandleReadCommand },
+    { "MD5"_s, HandleHashCommand },
+    { "SHA1"_s, HandleHashCommand },
+    { "SHA224"_s, HandleHashCommand },
+    { "SHA256"_s, HandleHashCommand },
+    { "SHA384"_s, HandleHashCommand },
+    { "SHA512"_s, HandleHashCommand },
+    { "SHA3_224"_s, HandleHashCommand },
+    { "SHA3_256"_s, HandleHashCommand },
+    { "SHA3_384"_s, HandleHashCommand },
+    { "SHA3_512"_s, HandleHashCommand },
+    { "STRINGS"_s, HandleStringsCommand },
+    { "GLOB"_s, HandleGlobCommand },
+    { "GLOB_RECURSE"_s, HandleGlobRecurseCommand },
+    { "MAKE_DIRECTORY"_s, HandleMakeDirectoryCommand },
+    { "RENAME"_s, HandleRename },
+    { "COPY_FILE"_s, HandleCopyFile },
+    { "REMOVE"_s, HandleRemove },
+    { "REMOVE_RECURSE"_s, HandleRemoveRecurse },
+    { "COPY"_s, HandleCopyCommand },
+    { "INSTALL"_s, HandleInstallCommand },
+    { "DIFFERENT"_s, HandleDifferentCommand },
+    { "RPATH_CHANGE"_s, HandleRPathChangeCommand },
+    { "CHRPATH"_s, HandleRPathChangeCommand },
+    { "RPATH_SET"_s, HandleRPathSetCommand },
+    { "RPATH_CHECK"_s, HandleRPathCheckCommand },
+    { "RPATH_REMOVE"_s, HandleRPathRemoveCommand },
+    { "READ_ELF"_s, HandleReadElfCommand },
+    { "REAL_PATH"_s, HandleRealPathCommand },
+    { "RELATIVE_PATH"_s, HandleRelativePathCommand },
+    { "TO_CMAKE_PATH"_s, HandleCMakePathCommand },
+    { "TO_NATIVE_PATH"_s, HandleNativePathCommand },
+    { "TOUCH"_s, HandleTouchCommand },
+    { "TOUCH_NOCREATE"_s, HandleTouchNocreateCommand },
+    { "TIMESTAMP"_s, HandleTimestampCommand },
+    { "GENERATE"_s, HandleGenerateCommand },
+    { "LOCK"_s, HandleLockCommand },
+    { "SIZE"_s, HandleSizeCommand },
+    { "READ_SYMLINK"_s, HandleReadSymlinkCommand },
+    { "CREATE_LINK"_s, HandleCreateLinkCommand },
+    { "GET_RUNTIME_DEPENDENCIES"_s, HandleGetRuntimeDependenciesCommand },
+    { "CONFIGURE"_s, HandleConfigureCommand },
+    { "ARCHIVE_CREATE"_s, HandleArchiveCreateCommand },
+    { "ARCHIVE_EXTRACT"_s, HandleArchiveExtractCommand },
+    { "CHMOD"_s, HandleChmodCommand },
+    { "CHMOD_RECURSE"_s, HandleChmodRecurseCommand },
+  };
+
+  return subcommand(args[0], args, status);
+}

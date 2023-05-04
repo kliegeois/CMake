@@ -1,23 +1,19 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <utility>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmCTestEmptyBinaryDirectoryCommand_h
-#define cmCTestEmptyBinaryDirectoryCommand_h
+#include <cm/memory>
 
 #include "cmCTestCommand.h"
+#include "cmCommand.h"
+
+class cmExecutionStatus;
 
 /** \class cmCTestEmptyBinaryDirectory
  * \brief Run a ctest script
@@ -28,55 +24,23 @@
 class cmCTestEmptyBinaryDirectoryCommand : public cmCTestCommand
 {
 public:
-
   cmCTestEmptyBinaryDirectoryCommand() {}
 
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone()
-    {
-    cmCTestEmptyBinaryDirectoryCommand* ni
-      = new cmCTestEmptyBinaryDirectoryCommand;
+  std::unique_ptr<cmCommand> Clone() override
+  {
+    auto ni = cm::make_unique<cmCTestEmptyBinaryDirectoryCommand>();
     ni->CTest = this->CTest;
     ni->CTestScriptHandler = this->CTestScriptHandler;
-    return ni;
-    }
+    return std::unique_ptr<cmCommand>(std::move(ni));
+  }
 
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
-  virtual bool InitialPass(std::vector<std::string> const& args);
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "CTEST_EMPTY_BINARY_DIRECTORY";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation()
-    {
-    return "empties the binary directory";
-    }
-
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_EMPTY_BINARY_DIRECTORY( directory )\n"
-      "Removes a binary directory. This command will perform some checks "
-      "prior to deleting the directory in an attempt to avoid malicious "
-      "or accidental directory deletion.";
-    }
-
-  cmTypeMacro(cmCTestEmptyBinaryDirectoryCommand, cmCTestCommand);
-
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 };
-
-
-#endif

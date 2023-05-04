@@ -1,45 +1,30 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef __cmCursesBoolWidget_h
-#define __cmCursesBoolWidget_h
-
+#include "cmCursesStandardIncludes.h"
 #include "cmCursesWidget.h"
+
 class cmCursesMainForm;
 
 class cmCursesBoolWidget : public cmCursesWidget
 {
 public:
   cmCursesBoolWidget(int width, int height, int left, int top);
-  
+
+  cmCursesBoolWidget(cmCursesBoolWidget const&) = delete;
+  cmCursesBoolWidget& operator=(cmCursesBoolWidget const&) = delete;
+
   // Description:
   // Handle user input. Called by the container of this widget
   // when this widget has focus. Returns true if the input was
   // handled.
-  virtual bool HandleInput(int& key, cmCursesMainForm* fm, WINDOW* w);
+  bool HandleInput(int& key, cmCursesMainForm* fm, WINDOW* w) override;
 
   // Description:
   // Set/Get the value (on/off).
   void SetValueAsBool(bool value);
   bool GetValueAsBool();
-
-protected:
-  cmCursesBoolWidget(const cmCursesBoolWidget& from);
-  void operator=(const cmCursesBoolWidget&);
-
 };
-
-#endif // __cmCursesBoolWidget_h

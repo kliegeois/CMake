@@ -1,26 +1,16 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
-#ifndef cmCTestBuildAndTestHandler_h
-#define cmCTestBuildAndTestHandler_h
-
+#include <cstddef>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "cmCTestGenericHandler.h"
-#include "cmListFileCache.h"
+#include "cmDuration.h"
 
 class cmake;
 
@@ -31,53 +21,51 @@ class cmake;
 class cmCTestBuildAndTestHandler : public cmCTestGenericHandler
 {
 public:
-  cmTypeMacro(cmCTestBuildAndTestHandler, cmCTestGenericHandler);
+  using Superclass = cmCTestGenericHandler;
 
   /*
    * The main entry point for this class
    */
-  int ProcessHandler();
+  int ProcessHandler() override;
 
   //! Set all the build and test arguments
-  virtual int ProcessCommandLineArguments(
+  int ProcessCommandLineArguments(
     const std::string& currentArg, size_t& idx,
-    const std::vector<std::string>& allArgs);
+    const std::vector<std::string>& allArgs) override;
 
   /*
    * Get the output variable
    */
   const char* GetOutput();
-  
+
   cmCTestBuildAndTestHandler();
 
-  virtual void Initialize();
+  void Initialize() override;
 
 protected:
-  ///! Run CMake and build a test and then run it as a single test.
+  //! Run CMake and build a test and then run it as a single test.
   int RunCMakeAndTest(std::string* output);
-  int RunCMake(std::string* outstring, cmOStringStream &out, 
-               std::string &cmakeOutString,
-               std::string &cwd, cmake *cm);
-  
-  cmStdString  Output;
+  int RunCMake(std::string* outstring, std::ostringstream& out,
+               std::string& cmakeOutString, cmake* cm);
 
-  std::string              BuildGenerator;
+  std::string Output;
+
+  std::string BuildGenerator;
+  std::string BuildGeneratorPlatform;
+  std::string BuildGeneratorToolset;
   std::vector<std::string> BuildOptions;
-  bool                     BuildTwoConfig;
-  std::string              BuildMakeProgram;
-  std::string              ConfigSample;
-  std::string              SourceDir;
-  std::string              BinaryDir;
-  std::string              BuildProject;
-  std::string              TestCommand;
-  bool                     BuildNoClean;
-  std::string              BuildRunDir;
-  std::string              ExecutableDirectory;
+  bool BuildTwoConfig;
+  std::string BuildMakeProgram;
+  std::string ConfigSample;
+  std::string SourceDir;
+  std::string BinaryDir;
+  std::string BuildProject;
+  std::string TestCommand;
+  bool BuildNoClean;
+  std::string BuildRunDir;
+  std::string ExecutableDirectory;
   std::vector<std::string> TestCommandArgs;
   std::vector<std::string> BuildTargets;
-  bool                     BuildNoCMake;
-  double                   Timeout;
+  bool BuildNoCMake;
+  cmDuration Timeout;
 };
-
-#endif
-

@@ -1,21 +1,8 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmGlobalMinGWMakefileGenerator_h
-#define cmGlobalMinGWMakefileGenerator_h
+#include <memory>
 
 #include "cmGlobalUnixMakefileGenerator3.h"
 
@@ -27,26 +14,26 @@
 class cmGlobalMinGWMakefileGenerator : public cmGlobalUnixMakefileGenerator3
 {
 public:
-  cmGlobalMinGWMakefileGenerator();
-  static cmGlobalGenerator* New() { 
-    return new cmGlobalMinGWMakefileGenerator; }
-  ///! Get the name for the generator.
-  virtual const char* GetName() const {
-    return cmGlobalMinGWMakefileGenerator::GetActualName();}
-  static const char* GetActualName() {return "MinGW Makefiles";}
+  cmGlobalMinGWMakefileGenerator(cmake* cm);
+  static std::unique_ptr<cmGlobalGeneratorFactory> NewFactory()
+  {
+    return std::unique_ptr<cmGlobalGeneratorFactory>(
+      new cmGlobalGeneratorSimpleFactory<cmGlobalMinGWMakefileGenerator>());
+  }
+  //! Get the name for the generator.
+  virtual std::string GetName() const
+  {
+    return cmGlobalMinGWMakefileGenerator::GetActualName();
+  }
+  static std::string GetActualName() { return "MinGW Makefiles"; }
 
   /** Get the documentation entry for this generator.  */
-  virtual void GetDocumentation(cmDocumentationEntry& entry) const;
-  
-  ///! Create a local generator appropriate to this Global Generator
-  virtual cmLocalGenerator *CreateLocalGenerator();
+  static void GetDocumentation(cmDocumentationEntry& entry);
 
   /**
-   * Try to determine system infomation such as shared library
-   * extension, pthreads, byte order etc.  
+   * Try to determine system information such as shared library
+   * extension, pthreads, byte order etc.
    */
-  virtual void EnableLanguage(std::vector<std::string>const& languages,
-                              cmMakefile *, bool optional);
+  virtual void EnableLanguage(std::vector<std::string> const& languages,
+                              cmMakefile*, bool optional);
 };
-
-#endif

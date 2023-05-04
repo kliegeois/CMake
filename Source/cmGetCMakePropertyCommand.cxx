@@ -1,65 +1,52 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGetCMakePropertyCommand.h"
 
-#include "cmake.h"
+#include <set>
+
+#include "cmExecutionStatus.h"
+#include "cmGlobalGenerator.h"
+#include "cmMakefile.h"
+#include "cmState.h"
+#include "cmStringAlgorithms.h"
+#include "cmValue.h"
 
 // cmGetCMakePropertyCommand
-bool cmGetCMakePropertyCommand::InitialPass(
-  std::vector<std::string> const& args)
+bool cmGetCMakePropertyCommand(std::vector<std::string> const& args,
+                               cmExecutionStatus& status)
 {
-  if(args.size() < 2 )
-    {
-    this->SetError("called with incorrect number of arguments");
+  if (args.size() < 2) {
+    status.SetError("called with incorrect number of arguments");
     return false;
-    }
-  
-  std::vector<std::string>::size_type cc;
-  std::string variable = args[0];
+  }
+
+  std::string const& variable = args[0];
   std::string output = "NOTFOUND";
 
-  if ( args[1] == "VARIABLES")
-    {
-    int cacheonly = 0;
-    std::vector<std::string> vars = this->Makefile->GetDefinitions(cacheonly);
-    for ( cc = 0; cc < vars.size(); cc ++ )
-      {
-      if ( cc > 0 )
-        {
-        output += ";";
-        }
-      output += vars[cc];
-      }
+  if (args[1] == "VARIABLES") {
+    if (cmValue varsProp = status.GetMakefile().GetProperty("VARIABLES")) {
+      output = *varsProp;
     }
-  else if ( args[1] == "MACROS" )
-    {
-    this->Makefile->GetListOfMacros(output);
+  } else if (args[1] == "MACROS") {
+    output.clear();
+    if (cmValue macrosProp = status.GetMakefile().GetProperty("MACROS")) {
+      output = *macrosProp;
     }
-  else
-    {
-    const char *prop = 
-      this->Makefile->GetCMakeInstance()->GetProperty(args[1].c_str());
-    if (prop)
-      {
-      output = prop;
-      }
+  } else if (args[1] == "COMPONENTS") {
+    const std::set<std::string>* components =
+      status.GetMakefile().GetGlobalGenerator()->GetInstallComponents();
+    output = cmJoin(*components, ";");
+  } else {
+    cmValue prop = nullptr;
+    if (!args[1].empty()) {
+      prop = status.GetMakefile().GetState()->GetGlobalProperty(args[1]);
     }
-  this->Makefile->AddDefinition(variable.c_str(), output.c_str());
-  
+    if (prop) {
+      output = *prop;
+    }
+  }
+
+  status.GetMakefile().AddDefinition(variable, output);
+
   return true;
 }
-

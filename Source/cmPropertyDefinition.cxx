@@ -1,52 +1,39 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmPropertyDefinition.h"
-#include "cmSystemTools.h"
 
-cmDocumentationEntry cmPropertyDefinition::GetDocumentation() const
+#include <tuple>
+
+cmPropertyDefinition::cmPropertyDefinition(std::string shortDescription,
+                                           std::string fullDescription,
+                                           bool chained)
+  : ShortDescription(std::move(shortDescription))
+  , FullDescription(std::move(fullDescription))
+  , Chained(chained)
 {
-  cmDocumentationEntry e;
-  e.Name = this->Name;
-  e.Brief = this->ShortDescription;
-  e.Full = this->FullDescription;
-  return e;
 }
 
-void cmPropertyDefinition
-::DefineProperty(const char *name, cmProperty::ScopeType scope,
-                 const char *shortDescription,
-                 const char *fullDescription,
-                 const char *sec,
-                 bool chain)
+void cmPropertyDefinitionMap::DefineProperty(
+  const std::string& name, cmProperty::ScopeType scope,
+  const std::string& ShortDescription, const std::string& FullDescription,
+  bool chain)
 {
-  this->Name = name;
-  this->Scope = scope;
-  this->Chained = chain;
-  if (shortDescription)
-    {
-    this->ShortDescription = shortDescription;
-    }
-  if (fullDescription)
-    {
-    this->FullDescription = fullDescription;
-    }
-  if (sec)
-    {
-    this->DocumentationSection = sec;
-    }
+  auto it = this->Map_.find(key_type(name, scope));
+  if (it == this->Map_.end()) {
+    // try_emplace() since C++17
+    this->Map_.emplace(
+      std::piecewise_construct, std::forward_as_tuple(name, scope),
+      std::forward_as_tuple(ShortDescription, FullDescription, chain));
+  }
 }
 
+cmPropertyDefinition const* cmPropertyDefinitionMap::GetPropertyDefinition(
+  const std::string& name, cmProperty::ScopeType scope) const
+{
+  auto it = this->Map_.find(key_type(name, scope));
+  if (it != this->Map_.end()) {
+    return &it->second;
+  }
+
+  return nullptr;
+}

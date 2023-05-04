@@ -1,4 +1,8 @@
-MESSAGE(SEND_ERROR
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
+
+
+message(SEND_ERROR
         "Modules/CheckSizeOf.cmake has been removed.  "
         "Use Modules/CheckTypeSize.cmake instead.  This "
-        "compatability check may be removed before the next release!")
+        "compatibility check may be removed before the next release!")

@@ -1,25 +1,15 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
+class cmExecutionStatus;
 
-=========================================================================*/
-#ifndef cmEnableTestingCommand_h
-#define cmEnableTestingCommand_h
-
-#include "cmCommand.h"
-
-/** \class cmEnableTestingCommand
+/**
  * \brief Enable testing for this directory and below.
  *
  * Produce the output testfile. This produces a file in the build directory
@@ -29,58 +19,8 @@
  * within the valid control structures are replicated in Testfile
  * (i.e. SUBDIRS() and ADD_TEST() commands within IF() commands that are
  * not entered by CMake are not replicated in Testfile).
- * Note that Dart expects to find this file in the build directory root; 
+ * Note that CTest expects to find this file in the build directory root;
  * therefore, this command should be in the source directory root too.
  */
-class cmEnableTestingCommand : public cmCommand
-{
-public:
-  /**
-   * This is a virtual constructor for the command.
-   */
-  virtual cmCommand* Clone() 
-    {
-    return new cmEnableTestingCommand;
-    }
-
-  /**
-   * This is called when the command is first encountered in
-   * the CMakeLists.txt file.
-   */
-  virtual bool InitialPass(std::vector<std::string> const&);
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() { return "enable_testing";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Enable testing for current directory and below.";
-    }
-  
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  enable_testing()\n"
-      "Enables testing for this directory and below.  "
-      "See also the add_test command.  Note that ctest expects to find "
-      "a test file in the build directory root.  Therefore, this command "
-      "should be in the source directory root.";
-    }
-  
-  cmTypeMacro(cmEnableTestingCommand, cmCommand);
-
-  ///! method to recurse and write the DartTestfiles
-  void CreateDartTestfileForMakefile(cmMakefile *mf);
-  
-};
-
-
-#endif
+bool cmEnableTestingCommand(std::vector<std::string> const&,
+                            cmExecutionStatus&);

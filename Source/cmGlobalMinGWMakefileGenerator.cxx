@@ -1,90 +1,58 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalMinGWMakefileGenerator.h"
+
+#include "cmDocumentationEntry.h"
 #include "cmLocalUnixMakefileGenerator3.h"
 #include "cmMakefile.h"
+#include "cmState.h"
+#include "cmake.h"
 
-cmGlobalMinGWMakefileGenerator::cmGlobalMinGWMakefileGenerator()
+cmGlobalMinGWMakefileGenerator::cmGlobalMinGWMakefileGenerator(cmake* cm)
+  : cmGlobalUnixMakefileGenerator3(cm)
 {
   this->FindMakeProgramFile = "CMakeMinGWFindMake.cmake";
   this->ForceUnixPaths = true;
   this->ToolSupportsColor = true;
   this->UseLinkScript = true;
+  cm->GetState()->SetWindowsShell(true);
+  cm->GetState()->SetMinGWMake(true);
 }
 
-void cmGlobalMinGWMakefileGenerator
-::EnableLanguage(std::vector<std::string>const& l, 
-                 cmMakefile *mf, 
-                 bool optional)
-{ 
+void cmGlobalMinGWMakefileGenerator::EnableLanguage(
+  std::vector<std::string> const& l, cmMakefile* mf, bool optional)
+{
   this->FindMakeProgram(mf);
-  std::string makeProgram = mf->GetRequiredDefinition("CMAKE_MAKE_PROGRAM");
+  const std::string& makeProgram =
+    mf->GetRequiredDefinition("CMAKE_MAKE_PROGRAM");
   std::vector<std::string> locations;
-  locations.push_back(cmSystemTools::GetProgramPath(makeProgram.c_str()));
+  locations.push_back(cmSystemTools::GetProgramPath(makeProgram));
   locations.push_back("/mingw/bin");
   locations.push_back("c:/mingw/bin");
   std::string tgcc = cmSystemTools::FindProgram("gcc", locations);
   std::string gcc = "gcc.exe";
-  if(tgcc.size())
-    {
+  if (!tgcc.empty()) {
     gcc = tgcc;
-    }
+  }
   std::string tgxx = cmSystemTools::FindProgram("g++", locations);
   std::string gxx = "g++.exe";
-  if(tgxx.size())
-    {
+  if (!tgxx.empty()) {
     gxx = tgxx;
-    }
-  mf->AddDefinition("CMAKE_GENERATOR_CC", gcc.c_str());
-  mf->AddDefinition("CMAKE_GENERATOR_CXX", gxx.c_str());
+  }
+  std::string trc = cmSystemTools::FindProgram("windres", locations);
+  std::string rc = "windres.exe";
+  if (!trc.empty()) {
+    rc = trc;
+  }
+  mf->AddDefinition("CMAKE_GENERATOR_CC", gcc);
+  mf->AddDefinition("CMAKE_GENERATOR_CXX", gxx);
+  mf->AddDefinition("CMAKE_GENERATOR_RC", rc);
   this->cmGlobalUnixMakefileGenerator3::EnableLanguage(l, mf, optional);
 }
 
-///! Create a local generator appropriate to this Global Generator
-cmLocalGenerator *cmGlobalMinGWMakefileGenerator::CreateLocalGenerator()
+void cmGlobalMinGWMakefileGenerator::GetDocumentation(
+  cmDocumentationEntry& entry)
 {
-  cmLocalUnixMakefileGenerator3* lg = new cmLocalUnixMakefileGenerator3;
-  lg->SetWindowsShell(true);
-  lg->SetGlobalGenerator(this);
-  lg->SetIgnoreLibPrefix(true);
-  lg->SetPassMakeflags(false);
-  lg->SetUnixCD(true);
-  lg->SetMinGWMake(true);
-
-  // mingw32-make has trouble running code like
-  //
-  //  @echo message with spaces
-  //
-  // If quotes are added
-  //
-  //  @echo "message with spaces"
-  //
-  // it runs but the quotes are displayed.  Instead just use cmake to
-  // echo.
-  lg->SetNativeEchoCommand("@$(CMAKE_COMMAND) -E echo ", false);
-  return lg;
-}
-
-//----------------------------------------------------------------------------
-void cmGlobalMinGWMakefileGenerator
-::GetDocumentation(cmDocumentationEntry& entry) const
-{
-  entry.Name = this->GetName();
+  entry.Name = cmGlobalMinGWMakefileGenerator::GetActualName();
   entry.Brief = "Generates a make file for use with mingw32-make.";
-  entry.Full = "The makefiles generated use cmd.exe as the shell.  "
-    "They do not require msys or a unix shell.";
 }

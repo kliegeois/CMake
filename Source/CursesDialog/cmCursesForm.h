@@ -1,23 +1,13 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
+#include "cmsys/FStream.hxx"
 
-=========================================================================*/
-#ifndef __cmCursesForm_h
-#define __cmCursesForm_h
-
-#include "../cmStandardIncludes.h"
 #include "cmCursesStandardIncludes.h"
 
 class cmCursesForm
@@ -25,7 +15,10 @@ class cmCursesForm
 public:
   cmCursesForm();
   virtual ~cmCursesForm();
-  
+
+  cmCursesForm(cmCursesForm const&) = delete;
+  cmCursesForm& operator=(cmCursesForm const&) = delete;
+
   // Description:
   // Handle user input.
   virtual void HandleInput() = 0;
@@ -42,7 +35,7 @@ public:
   // Description:
   // During a CMake run, an error handle should add errors
   // to be displayed afterwards.
-  virtual void AddError(const char*, const char*) {}
+  virtual void AddError(const std::string&, const char*) {}
 
   // Description:
   // Turn debugging on. This will create ccmakelog.txt.
@@ -58,23 +51,13 @@ public:
 
   // Description:
   // Return the FORM. Should be only used by low-level methods.
-  FORM* GetForm()
-    {
-      return this->Form;
-    }
+  FORM* GetForm() { return this->Form; }
 
   static cmCursesForm* CurrentForm;
-  
 
 protected:
-
-  static std::ofstream DebugFile;
+  static cmsys::ofstream DebugFile;
   static bool Debug;
-
-  cmCursesForm(const cmCursesForm& form);
-  void operator=(const cmCursesForm&);
 
   FORM* Form;
 };
-
-#endif // __cmCursesForm_h

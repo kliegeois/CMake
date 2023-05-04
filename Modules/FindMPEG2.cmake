@@ -1,39 +1,50 @@
-# - Find the native MPEG2 includes and library
-# This module defines
-#  MPEG2_INCLUDE_DIR, path to mpeg2dec/mpeg2.h, etc.
-#  MPEG2_LIBRARIES, the libraries required to use MPEG2.
-#  MPEG2_FOUND, If false, do not try to use MPEG2.
-# also defined, but not for general use are
-#  MPEG2_mpeg2_LIBRARY, where to find the MPEG2 library.
-#  MPEG2_vo_LIBRARY, where to find the vo library.
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-FIND_PATH(MPEG2_INCLUDE_DIR mpeg2.h
-  /usr/local/livid
-)
+#[=======================================================================[.rst:
+FindMPEG2
+---------
 
-FIND_LIBRARY(MPEG2_mpeg2_LIBRARY mpeg2
-  /usr/local/livid/mpeg2dec/libmpeg2/.libs
-)
+Find the native MPEG2 includes and library
 
-FIND_LIBRARY( MPEG2_vo_LIBRARY vo
-  /usr/local/livid/mpeg2dec/libvo/.libs
-)
+This module defines
 
+::
 
-# handle the QUIETLY and REQUIRED arguments and set MPEG2_FOUND to TRUE if 
-# all listed variables are TRUE
-INCLUDE(FindPackageHandleStandardArgs)
+  MPEG2_INCLUDE_DIR, path to mpeg2dec/mpeg2.h, etc.
+  MPEG2_LIBRARIES, the libraries required to use MPEG2.
+  MPEG2_FOUND, If false, do not try to use MPEG2.
+
+also defined, but not for general use are
+
+::
+
+  MPEG2_mpeg2_LIBRARY, where to find the MPEG2 library.
+  MPEG2_vo_LIBRARY, where to find the vo library.
+#]=======================================================================]
+
+find_path(MPEG2_INCLUDE_DIR
+  NAMES mpeg2.h mpeg2dec/mpeg2.h)
+
+find_library(MPEG2_mpeg2_LIBRARY mpeg2)
+
+find_library(MPEG2_vo_LIBRARY vo)
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
 FIND_PACKAGE_HANDLE_STANDARD_ARGS(MPEG2 DEFAULT_MSG MPEG2_mpeg2_LIBRARY MPEG2_INCLUDE_DIR)
 
-IF(MPEG2_FOUND)
-  SET( MPEG2_LIBRARIES ${MPEG2_mpeg2_LIBRARY} 
-                        ${MPEG2_vo_LIBRARY})
+if(MPEG2_FOUND)
+  set(MPEG2_LIBRARIES ${MPEG2_mpeg2_LIBRARY})
+  if(MPEG2_vo_LIBRARY)
+    list(APPEND MPEG2_LIBRARIES ${MPEG2_vo_LIBRARY})
+  endif()
 
   #some native mpeg2 installations will depend
   #on libSDL, if found, add it in.
-  INCLUDE( FindSDL.cmake )
-  IF(SDL_FOUND)
-    SET( MPEG2_LIBRARIES ${MPEG2_LIBRARIES} ${SDL_LIBRARY})
-  ENDIF(SDL_FOUND)
-ENDIF(MPEG2_FOUND)
+  find_package(SDL)
+  if(SDL_FOUND)
+    set( MPEG2_LIBRARIES ${MPEG2_LIBRARIES} ${SDL_LIBRARY})
+  endif()
+endif()
 
+mark_as_advanced(MPEG2_INCLUDE_DIR MPEG2_mpeg2_LIBRARY MPEG2_vo_LIBRARY)

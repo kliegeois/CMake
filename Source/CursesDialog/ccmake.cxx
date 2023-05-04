@@ -1,221 +1,213 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <unistd.h>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
+#include "cmsys/Encoding.hxx"
 
-=========================================================================*/
-#include "../cmCacheManager.h"
-#include "../cmSystemTools.h"
-#include "../cmake.h"
-#include "../cmDocumentation.h"
-
-#include <signal.h>
-#include <sys/ioctl.h>
-
+#include "cmCursesColor.h"
+#include "cmCursesForm.h"
 #include "cmCursesMainForm.h"
 #include "cmCursesStandardIncludes.h"
+#include "cmDocumentation.h"
+#include "cmDocumentationEntry.h" // IWYU pragma: keep
+#include "cmMessageMetadata.h"
+#include "cmState.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
 
-#include <form.h>
-
-//----------------------------------------------------------------------------
-static const char * cmDocumentationName[][3] =
-{
-  {0,
-   "  ccmake - Curses Interface for CMake.", 0},
-  {0,0,0}
+static const char* cmDocumentationName[][2] = {
+  { nullptr, "  ccmake - Curses Interface for CMake." },
+  { nullptr, nullptr }
 };
 
-//----------------------------------------------------------------------------
-static const char * cmDocumentationUsage[][3] =
-{
-  {0,
-   "  ccmake <path-to-source>\n"
-   "  ccmake <path-to-existing-build>", 0},
-  {0,0,0}
+static const char* cmDocumentationUsage[][2] = {
+  { nullptr,
+    "  ccmake <path-to-source>\n"
+    "  ccmake <path-to-existing-build>" },
+  { nullptr,
+    "Specify a source directory to (re-)generate a build system for "
+    "it in the current working directory.  Specify an existing build "
+    "directory to re-generate its build system." },
+  { nullptr, nullptr }
 };
 
-//----------------------------------------------------------------------------
-static const char * cmDocumentationDescription[][3] =
-{
-  {0,
-   "The \"ccmake\" executable is the CMake curses interface.  Project "
-   "configuration settings may be specified interactively through "
-   "this GUI.  Brief instructions are provided at the bottom of the "
-   "terminal when the program is running.", 0},
-  CMAKE_STANDARD_INTRODUCTION,
-  {0,0,0}
+static const char* cmDocumentationUsageNote[][2] = {
+  { nullptr, "Run 'ccmake --help' for more information." },
+  { nullptr, nullptr }
 };
 
-//----------------------------------------------------------------------------
-static const char * cmDocumentationOptions[][3] =
-{
+static const char* cmDocumentationOptions[][2] = {
   CMAKE_STANDARD_OPTIONS_TABLE,
-  {0,0,0}
+  { nullptr, nullptr }
 };
 
-//----------------------------------------------------------------------------
-static const char * cmDocumentationSeeAlso[][3] =
-{
-  {0, "cmake", 0},
-  {0, "ctest", 0},
-  {0, 0, 0}
-};
+cmCursesForm* cmCursesForm::CurrentForm = nullptr;
 
-cmCursesForm* cmCursesForm::CurrentForm=0;
+extern "C" {
 
-extern "C"
+static void onsig(int /*unused*/)
 {
-
-void onsig(int)
-{
-  if (cmCursesForm::CurrentForm)
-    {
+  if (cmCursesForm::CurrentForm) {
     endwin();
-    initscr(); /* Initialization */ 
-    noecho(); /* Echo off */ 
-    cbreak(); /* nl- or cr not needed */ 
-    keypad(stdscr,TRUE); /* Use key symbols as 
-                            KEY_DOWN*/ 
-    refresh();
-    int x,y;
-    getmaxyx(stdscr, y, x);
-    cmCursesForm::CurrentForm->Render(1,1,x,y);
-    cmCursesForm::CurrentForm->UpdateStatusBar();
+    if (initscr() == nullptr) {
+      static const char errmsg[] = "Error: ncurses initialization failed\n";
+      auto r = write(STDERR_FILENO, errmsg, sizeof(errmsg) - 1);
+      static_cast<void>(r);
+      exit(1);
     }
+    noecho();             /* Echo off */
+    cbreak();             /* nl- or cr not needed */
+    keypad(stdscr, true); /* Use key symbols as KEY_DOWN */
+    refresh();
+    int x;
+    int y;
+    getmaxyx(stdscr, y, x);
+    cmCursesForm::CurrentForm->Render(1, 1, x, y);
+    cmCursesForm::CurrentForm->UpdateStatusBar();
+  }
   signal(SIGWINCH, onsig);
 }
- 
 }
 
-void CMakeErrorHandler(const char* message, const char* title, bool&, void* clientData)
+int main(int argc, char const* const* argv)
 {
-  cmCursesForm* self = static_cast<cmCursesForm*>( clientData );
-  self->AddError(message, title);
-}
+  cmSystemTools::EnsureStdPipes();
+  cmsys::Encoding::CommandLineArguments encoding_args =
+    cmsys::Encoding::CommandLineArguments::Main(argc, argv);
+  argc = encoding_args.argc();
+  argv = encoding_args.argv();
 
-int main(int argc, char** argv)
-{
-  cmSystemTools::FindExecutableDirectory(argv[0]);
+  cmSystemTools::InitializeLibUV();
+  cmSystemTools::FindCMakeResources(argv[0]);
   cmDocumentation doc;
-  if(doc.CheckOptions(argc, argv))
-    {
-    cmake hcm;
-    std::vector<cmDocumentationEntry> commands;
-    std::vector<cmDocumentationEntry> compatCommands;
-    std::vector<cmDocumentationEntry> generators;
-    hcm.GetCommandDocumentation(commands, true, false);
-    hcm.GetCommandDocumentation(compatCommands, false, true);
-    hcm.GetGeneratorDocumentation(generators);
+  doc.addCMakeStandardDocSections();
+  if (doc.CheckOptions(argc, argv)) {
+    cmake hcm(cmake::RoleInternal, cmState::Unknown);
+    hcm.SetHomeDirectory("");
+    hcm.SetHomeOutputDirectory("");
+    hcm.AddCMakePaths();
+    auto generators = hcm.GetGeneratorsDocumentation();
     doc.SetName("ccmake");
-    doc.SetSection("Name",cmDocumentationName);
-    doc.SetSection("Usage",cmDocumentationUsage);
-    doc.SetSection("Description",cmDocumentationDescription);
-    doc.SetSection("Generators",generators);
-    doc.SetSection("Options",cmDocumentationOptions);
-    doc.SetSection("Command",commands);
-    doc.SetSection("Compatibility Commands",compatCommands);
-    doc.SetSeeAlsoList(cmDocumentationSeeAlso);
-    return doc.PrintRequestedDocumentation(std::cout)? 0:1;
-    }  
-  
+    doc.SetSection("Name", cmDocumentationName);
+    doc.SetSection("Usage", cmDocumentationUsage);
+    if (argc == 1) {
+      doc.AppendSection("Usage", cmDocumentationUsageNote);
+    }
+    doc.AppendSection("Generators", generators);
+    doc.PrependSection("Options", cmDocumentationOptions);
+    return doc.PrintRequestedDocumentation(std::cout) ? 0 : 1;
+  }
+
   bool debug = false;
   unsigned int i;
   int j;
   std::vector<std::string> args;
-  for(j =0; j < argc; ++j)
-    {
-    if(strcmp(argv[j], "-debug") == 0)
-      {
+  for (j = 0; j < argc; ++j) {
+    if (strcmp(argv[j], "-debug") == 0) {
       debug = true;
-      }
-    else
-      {
-      args.push_back(argv[j]);
-      }
+    } else {
+      args.emplace_back(argv[j]);
     }
+  }
 
   std::string cacheDir = cmSystemTools::GetCurrentWorkingDirectory();
-  for(i=1; i < args.size(); ++i)
-    {
-    std::string arg = args[i];
-    if(arg.find("-B",0) == 0)
-      {
+  for (i = 1; i < args.size(); ++i) {
+    std::string const& arg = args[i];
+    if (cmHasPrefix(arg, "-B")) {
       cacheDir = arg.substr(2);
-      }
     }
+  }
 
   cmSystemTools::DisableRunCommandOutput();
 
-  if (debug)
-    {
+  if (debug) {
     cmCursesForm::DebugStart();
-    }
+  }
 
-  initscr(); /* Initialization */ 
-  noecho(); /* Echo off */ 
-  cbreak(); /* nl- or cr not needed */ 
-  keypad(stdscr,TRUE); /* Use key symbols as 
-                          KEY_DOWN*/ 
+  if (initscr() == nullptr) {
+    fprintf(stderr, "Error: ncurses initialization failed\n");
+    exit(1);
+  }
+  noecho();             /* Echo off */
+  cbreak();             /* nl- or cr not needed */
+  keypad(stdscr, true); /* Use key symbols as KEY_DOWN */
+  cmCursesColor::InitColors();
 
   signal(SIGWINCH, onsig);
 
-  int x,y;
+  int x;
+  int y;
   getmaxyx(stdscr, y, x);
-  if ( x < cmCursesMainForm::MIN_WIDTH  || 
-       y < cmCursesMainForm::MIN_HEIGHT )
-    {
+  if (x < cmCursesMainForm::MIN_WIDTH || y < cmCursesMainForm::MIN_HEIGHT) {
     endwin();
     std::cerr << "Window is too small. A size of at least "
-              << cmCursesMainForm::MIN_WIDTH << " x " 
-              <<  cmCursesMainForm::MIN_HEIGHT
-              << " is required to run ccmake." <<  std::endl;
+              << cmCursesMainForm::MIN_WIDTH << " x "
+              << cmCursesMainForm::MIN_HEIGHT << " is required to run ccmake."
+              << std::endl;
     return 1;
-    }
-
+  }
 
   cmCursesMainForm* myform;
 
   myform = new cmCursesMainForm(args, x);
-  if(myform->LoadCache(cacheDir.c_str()))
-    {
+  if (myform->LoadCache(cacheDir.c_str())) {
     curses_clear();
     touchwin(stdscr);
     endwin();
     delete myform;
     std::cerr << "Error running cmake::LoadCache().  Aborting.\n";
     return 1;
-    }
+  }
 
-  cmSystemTools::SetErrorCallback(CMakeErrorHandler, myform);
+  /*
+   * The message is stored in a list by the form which will be
+   * joined by '\n' before display.
+   * Removing any trailing '\n' avoid extra empty lines in the final results
+   */
+  auto cleanMessage = [](const std::string& message) -> std::string {
+    auto msg = message;
+    if (!msg.empty() && msg.back() == '\n') {
+      msg.pop_back();
+    }
+    return msg;
+  };
+  cmSystemTools::SetMessageCallback(
+    [&](const std::string& message, const cmMessageMetadata& md) {
+      myform->AddError(cleanMessage(message), md.title);
+    });
+  cmSystemTools::SetStderrCallback([&](const std::string& message) {
+    myform->AddError(cleanMessage(message), "");
+  });
+  cmSystemTools::SetStdoutCallback([&](const std::string& message) {
+    myform->UpdateProgress(cleanMessage(message), -1);
+  });
 
   cmCursesForm::CurrentForm = myform;
 
   myform->InitializeUI();
-  if ( myform->Configure(1) == 0 )
-    {
+  if (myform->Configure(1) == 0) {
     myform->Render(1, 1, x, y);
     myform->HandleInput();
-    }
-  
+  }
+
   // Need to clean-up better
   curses_clear();
   touchwin(stdscr);
   endwin();
   delete cmCursesForm::CurrentForm;
-  cmCursesForm::CurrentForm = 0;
+  cmCursesForm::CurrentForm = nullptr;
 
   std::cout << std::endl << std::endl;
-  
-  return 0;
 
+  return 0;
 }

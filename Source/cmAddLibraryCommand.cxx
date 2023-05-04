@@ -1,128 +1,293 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmAddLibraryCommand.h"
 
-#include "cmake.h"
+#include "cmExecutionStatus.h"
+#include "cmGeneratorExpression.h"
+#include "cmGlobalGenerator.h"
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmPolicies.h"
+#include "cmState.h"
+#include "cmStateTypes.h"
+#include "cmStringAlgorithms.h"
+#include "cmTarget.h"
+#include "cmValue.h"
 
-// cmLibraryCommand
-bool cmAddLibraryCommand::InitialPass(std::vector<std::string> const& args)
+bool cmAddLibraryCommand(std::vector<std::string> const& args,
+                         cmExecutionStatus& status)
 {
-  if(args.size() < 1 )
-    {
-    this->SetError("called with incorrect number of arguments");
+  if (args.empty()) {
+    status.SetError("called with incorrect number of arguments");
     return false;
-    }
+  }
+
+  cmMakefile& mf = status.GetMakefile();
   // Library type defaults to value of BUILD_SHARED_LIBS, if it exists,
   // otherwise it defaults to static library.
-  cmTarget::TargetType type = cmTarget::SHARED_LIBRARY;
-  if (cmSystemTools::IsOff(this->Makefile->GetDefinition("BUILD_SHARED_LIBS")))
-    {
-    type = cmTarget::STATIC_LIBRARY;
-    }
+  cmStateEnums::TargetType type = cmStateEnums::SHARED_LIBRARY;
+  if (cmIsOff(mf.GetDefinition("BUILD_SHARED_LIBS"))) {
+    type = cmStateEnums::STATIC_LIBRARY;
+  }
   bool excludeFromAll = false;
   bool importTarget = false;
-  
-  std::vector<std::string>::const_iterator s = args.begin();
+  bool importGlobal = false;
 
-  std::string libName = *s;
+  auto s = args.begin();
+
+  std::string const& libName = *s;
 
   ++s;
-  
+
   // If the second argument is "SHARED" or "STATIC", then it controls
   // the type of library.  Otherwise, it is treated as a source or
   // source list name. There may be two keyword arguments, check for them
-  while ( s != args.end() )
-    {
+  bool haveSpecifiedType = false;
+  bool isAlias = false;
+  while (s != args.end()) {
     std::string libType = *s;
-    if(libType == "STATIC")
-      {
-      ++s;
-      type = cmTarget::STATIC_LIBRARY;
+    if (libType == "STATIC") {
+      if (type == cmStateEnums::INTERFACE_LIBRARY) {
+        status.SetError(
+          "INTERFACE library specified with conflicting STATIC type.");
+        return false;
       }
-    else if(libType == "SHARED")
-      {
       ++s;
-      type = cmTarget::SHARED_LIBRARY;
+      type = cmStateEnums::STATIC_LIBRARY;
+      haveSpecifiedType = true;
+    } else if (libType == "SHARED") {
+      if (type == cmStateEnums::INTERFACE_LIBRARY) {
+        status.SetError(
+          "INTERFACE library specified with conflicting SHARED type.");
+        return false;
       }
-    else if(libType == "MODULE")
-      {
       ++s;
-      type = cmTarget::MODULE_LIBRARY;
+      type = cmStateEnums::SHARED_LIBRARY;
+      haveSpecifiedType = true;
+    } else if (libType == "MODULE") {
+      if (type == cmStateEnums::INTERFACE_LIBRARY) {
+        status.SetError(
+          "INTERFACE library specified with conflicting MODULE type.");
+        return false;
       }
-    else if(*s == "EXCLUDE_FROM_ALL")
-      {
+      ++s;
+      type = cmStateEnums::MODULE_LIBRARY;
+      haveSpecifiedType = true;
+    } else if (libType == "OBJECT") {
+      if (type == cmStateEnums::INTERFACE_LIBRARY) {
+        status.SetError(
+          "INTERFACE library specified with conflicting OBJECT type.");
+        return false;
+      }
+      ++s;
+      type = cmStateEnums::OBJECT_LIBRARY;
+      haveSpecifiedType = true;
+    } else if (libType == "UNKNOWN") {
+      if (type == cmStateEnums::INTERFACE_LIBRARY) {
+        status.SetError(
+          "INTERFACE library specified with conflicting UNKNOWN type.");
+        return false;
+      }
+      ++s;
+      type = cmStateEnums::UNKNOWN_LIBRARY;
+      haveSpecifiedType = true;
+    } else if (libType == "ALIAS") {
+      if (type == cmStateEnums::INTERFACE_LIBRARY) {
+        status.SetError(
+          "INTERFACE library specified with conflicting ALIAS type.");
+        return false;
+      }
+      ++s;
+      isAlias = true;
+    } else if (libType == "INTERFACE") {
+      if (haveSpecifiedType) {
+        status.SetError(
+          "INTERFACE library specified with conflicting/multiple types.");
+        return false;
+      }
+      if (isAlias) {
+        status.SetError(
+          "INTERFACE library specified with conflicting ALIAS type.");
+        return false;
+      }
+      ++s;
+      type = cmStateEnums::INTERFACE_LIBRARY;
+      haveSpecifiedType = true;
+    } else if (*s == "EXCLUDE_FROM_ALL") {
       ++s;
       excludeFromAll = true;
-      }
-    else if(*s == "IMPORT")
-      {
+    } else if (*s == "IMPORTED") {
       ++s;
       importTarget = true;
-      }
-    else
-      {
+    } else if (importTarget && *s == "GLOBAL") {
+      ++s;
+      importGlobal = true;
+    } else if (type == cmStateEnums::INTERFACE_LIBRARY && *s == "GLOBAL") {
+      status.SetError(
+        "GLOBAL option may only be used with IMPORTED libraries.");
+      return false;
+    } else {
       break;
+    }
+  }
+
+  if (type == cmStateEnums::INTERFACE_LIBRARY) {
+    if (importGlobal && !importTarget) {
+      status.SetError(
+        "INTERFACE library specified as GLOBAL, but not as IMPORTED.");
+      return false;
+    }
+  }
+
+  bool nameOk = cmGeneratorExpression::IsValidTargetName(libName) &&
+    !cmGlobalGenerator::IsReservedTarget(libName);
+
+  if (nameOk && !importTarget && !isAlias) {
+    nameOk = libName.find(':') == std::string::npos;
+  }
+  if (!nameOk && !mf.CheckCMP0037(libName, type)) {
+    return false;
+  }
+
+  if (isAlias) {
+    if (!cmGeneratorExpression::IsValidTargetName(libName)) {
+      status.SetError("Invalid name for ALIAS: " + libName);
+      return false;
+    }
+    if (excludeFromAll) {
+      status.SetError("EXCLUDE_FROM_ALL with ALIAS makes no sense.");
+      return false;
+    }
+    if (importTarget || importGlobal) {
+      status.SetError("IMPORTED with ALIAS is not allowed.");
+      return false;
+    }
+    if (args.size() != 3) {
+      status.SetError("ALIAS requires exactly one target argument.");
+      return false;
+    }
+
+    if (mf.GetPolicyStatus(cmPolicies::CMP0107) == cmPolicies::NEW) {
+      // Make sure the target does not already exist.
+      if (mf.FindTargetToUse(libName)) {
+        status.SetError(cmStrCat(
+          "cannot create ALIAS target \"", libName,
+          "\" because another target with the same name already exists."));
+        return false;
       }
     }
 
-  /* ideally we should check whether for the linker language of the target 
-    CMAKE_${LANG}_CREATE_SHARED_LIBRARY is defined and if not default to
-    STATIC. But at this point we know only the name of the target, but not 
-    yet its linker language. */
-  if ((type != cmTarget::STATIC_LIBRARY) && 
-       (this->Makefile->GetCMakeInstance()->GetPropertyAsBool(
-                                      "TARGET_SUPPORTS_SHARED_LIBS") == false))
-    {
-    std::string msg = "ADD_LIBRARY for library ";
-    msg += args[0];
-    msg += " is used with the ";
-    msg += type==cmTarget::SHARED_LIBRARY ? "SHARED" : "MODULE";
-    msg += " option, but the target platform supports only STATIC libraries. "
-           "Building it STATIC instead. This may lead to problems.";
-    cmSystemTools::Message(msg.c_str() ,"Warning");
-    type = cmTarget::STATIC_LIBRARY;
+    std::string const& aliasedName = *s;
+    if (mf.IsAlias(aliasedName)) {
+      status.SetError(cmStrCat("cannot create ALIAS target \"", libName,
+                               "\" because target \"", aliasedName,
+                               "\" is itself an ALIAS."));
+      return false;
     }
-
-  if (importTarget)
-    {
-    this->Makefile->AddNewTarget(type, libName.c_str(), true);
+    cmTarget* aliasedTarget = mf.FindTargetToUse(aliasedName, true);
+    if (!aliasedTarget) {
+      status.SetError(cmStrCat("cannot create ALIAS target \"", libName,
+                               "\" because target \"", aliasedName,
+                               "\" does not already exist."));
+      return false;
+    }
+    cmStateEnums::TargetType aliasedType = aliasedTarget->GetType();
+    if (aliasedType != cmStateEnums::SHARED_LIBRARY &&
+        aliasedType != cmStateEnums::STATIC_LIBRARY &&
+        aliasedType != cmStateEnums::MODULE_LIBRARY &&
+        aliasedType != cmStateEnums::OBJECT_LIBRARY &&
+        aliasedType != cmStateEnums::INTERFACE_LIBRARY &&
+        !(aliasedType == cmStateEnums::UNKNOWN_LIBRARY &&
+          aliasedTarget->IsImported())) {
+      status.SetError(cmStrCat("cannot create ALIAS target \"", libName,
+                               "\" because target \"", aliasedName,
+                               "\" is not a library."));
+      return false;
+    }
+    mf.AddAlias(libName, aliasedName,
+                !aliasedTarget->IsImported() ||
+                  aliasedTarget->IsImportedGloballyVisible());
     return true;
+  }
+
+  if (importTarget && excludeFromAll) {
+    status.SetError("excludeFromAll with IMPORTED target makes no sense.");
+    return false;
+  }
+
+  /* ideally we should check whether for the linker language of the target
+    CMAKE_${LANG}_CREATE_SHARED_LIBRARY is defined and if not default to
+    STATIC. But at this point we know only the name of the target, but not
+    yet its linker language. */
+  if ((type == cmStateEnums::SHARED_LIBRARY ||
+       type == cmStateEnums::MODULE_LIBRARY) &&
+      !mf.GetState()->GetGlobalPropertyAsBool("TARGET_SUPPORTS_SHARED_LIBS")) {
+    mf.IssueMessage(
+      MessageType::AUTHOR_WARNING,
+      cmStrCat(
+        "ADD_LIBRARY called with ",
+        (type == cmStateEnums::SHARED_LIBRARY ? "SHARED" : "MODULE"),
+        " option but the target platform does not support dynamic linking. ",
+        "Building a STATIC library instead. This may lead to problems."));
+    type = cmStateEnums::STATIC_LIBRARY;
+  }
+
+  // Handle imported target creation.
+  if (importTarget) {
+    // The IMPORTED signature requires a type to be specified explicitly.
+    if (!haveSpecifiedType) {
+      status.SetError("called with IMPORTED argument but no library type.");
+      return false;
+    }
+    if (type == cmStateEnums::INTERFACE_LIBRARY) {
+      if (!cmGeneratorExpression::IsValidTargetName(libName)) {
+        status.SetError(cmStrCat(
+          "Invalid name for IMPORTED INTERFACE library target: ", libName));
+        return false;
+      }
     }
 
-  if (s == args.end())
-    {
-    std::string msg = "You have called ADD_LIBRARY for library ";
-    msg += args[0];
-    msg += " without any source files. This typically indicates a problem ";
-    msg += "with your CMakeLists.txt file";
-    cmSystemTools::Message(msg.c_str() ,"Warning");
+    // Make sure the target does not already exist.
+    if (mf.FindTargetToUse(libName)) {
+      status.SetError(cmStrCat(
+        "cannot create imported target \"", libName,
+        "\" because another target with the same name already exists."));
+      return false;
     }
 
-  std::vector<std::string> srclists;
-  while (s != args.end()) 
-    {
-    srclists.push_back(*s);  
-    ++s;
-    }
+    // Create the imported target.
+    mf.AddImportedTarget(libName, type, importGlobal);
+    return true;
+  }
 
-  this->Makefile->AddLibrary(libName.c_str(), type, srclists,
-                             excludeFromAll);
-  
+  // A non-imported target may not have UNKNOWN type.
+  if (type == cmStateEnums::UNKNOWN_LIBRARY) {
+    mf.IssueMessage(
+      MessageType::FATAL_ERROR,
+      "The UNKNOWN library type may be used only for IMPORTED libraries.");
+    return true;
+  }
+
+  // Enforce name uniqueness.
+  {
+    std::string msg;
+    if (!mf.EnforceUniqueName(libName, msg)) {
+      status.SetError(msg);
+      return false;
+    }
+  }
+
+  if (type == cmStateEnums::INTERFACE_LIBRARY) {
+    if (!cmGeneratorExpression::IsValidTargetName(libName) ||
+        libName.find("::") != std::string::npos) {
+      status.SetError(
+        cmStrCat("Invalid name for INTERFACE library target: ", libName));
+      return false;
+    }
+  }
+
+  std::vector<std::string> srcs(s, args.end());
+  mf.AddLibrary(libName, type, srcs, excludeFromAll);
+
   return true;
 }
-
-

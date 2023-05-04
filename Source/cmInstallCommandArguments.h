@@ -1,69 +1,89 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
+#include "cmArgumentParser.h"
 
-=========================================================================*/
-
-#ifndef cmInstallCommandArguments_h
-#define cmInstallCommandArguments_h
-
-#include "cmStandardIncludes.h"
-#include "cmCommandArgumentsHelper.h"
-
-class cmInstallCommandArguments
+class cmInstallCommandArguments : public cmArgumentParser<void>
 {
-  public:
-    cmInstallCommandArguments();
-    void SetGenericArguments(cmInstallCommandArguments* args) 
-                                               {this->GenericArguments = args;}
-    void Parse(const std::vector<std::string>* args, 
-               std::vector<std::string>* unconsumedArgs);
+public:
+  cmInstallCommandArguments(std::string defaultComponent);
+  void SetGenericArguments(cmInstallCommandArguments* args)
+  {
+    this->GenericArguments = args;
+  }
 
-    // Compute destination path.and check permissions
-    bool Finalize();
+  // Compute destination path.and check permissions
+  bool Finalize();
 
-    const std::string& GetDestination() const;
-    const std::string& GetComponent() const;
-    const std::string& GetRename() const;
-    const std::string& GetPermissions() const;
-    const std::vector<std::string>& GetConfigurations() const;
-    bool GetOptional() const;
+  const std::string& GetDestination() const;
+  const std::string& GetComponent() const;
+  const std::string& GetNamelinkComponent() const;
+  bool GetExcludeFromAll() const;
+  const std::string& GetRename() const;
+  const std::string& GetPermissions() const;
+  const std::vector<std::string>& GetConfigurations() const;
+  bool GetOptional() const;
+  bool GetNamelinkOnly() const;
+  bool GetNamelinkSkip() const;
+  bool HasNamelinkComponent() const;
+  const std::string& GetType() const;
 
-    // once HandleDirectoryMode() is also switched to using 
-    // cmInstallCommandArguments then these two functions can become non-static
-    // private member functions without arguments
-    static void ComputeDestination(const std::string& inDest, 
-                                   std::string& absDest);
-    static bool CheckPermissions(const std::string& onePerm, 
-                                 std::string& perm);
-    cmCommandArgumentsHelper Parser;
-    cmCommandArgumentGroup ArgumentGroup;
-  private:
-    cmCAString Destination;
-    cmCAString Component;
-    cmCAString Rename;
-    cmCAStringVector Permissions;
-    cmCAStringVector Configurations;
-    cmCAEnabler Optional;
+  const std::string& GetDefaultComponent() const;
 
-    std::string AbsDestination;
-    std::string PermissionsString;
+  static bool CheckPermissions(const std::string& onePerm, std::string& perm);
 
-    cmInstallCommandArguments* GenericArguments;
-    static const char* PermissionsTable[];
-    static const std::string EmptyString;
-    bool CheckPermissions();
+private:
+  std::string Destination;
+  std::string Component;
+  std::string NamelinkComponent;
+  bool ExcludeFromAll = false;
+  std::string Rename;
+  std::vector<std::string> Permissions;
+  std::vector<std::string> Configurations;
+  bool Optional = false;
+  bool NamelinkOnly = false;
+  bool NamelinkSkip = false;
+  std::string Type;
+
+  std::string DestinationString;
+  std::string PermissionsString;
+
+  cmInstallCommandArguments* GenericArguments = nullptr;
+  static const char* PermissionsTable[];
+  static const std::string EmptyString;
+  std::string DefaultComponentName;
+  bool CheckPermissions();
 };
 
-#endif
+class cmInstallCommandIncludesArgument
+{
+public:
+  cmInstallCommandIncludesArgument();
+  void Parse(const std::vector<std::string>* args,
+             std::vector<std::string>* unconsumedArgs);
+
+  const std::vector<std::string>& GetIncludeDirs() const;
+
+private:
+  std::vector<std::string> IncludeDirs;
+};
+
+class cmInstallCommandFileSetArguments : public cmInstallCommandArguments
+{
+public:
+  cmInstallCommandFileSetArguments(std::string defaultComponent);
+
+  void Parse(std::vector<std::string> args,
+             std::vector<std::string>* unconsumedArgs);
+
+  const std::string& GetFileSet() const { return this->FileSet; }
+
+private:
+  std::string FileSet;
+};

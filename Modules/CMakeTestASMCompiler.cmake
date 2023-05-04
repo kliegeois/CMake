@@ -1,11 +1,25 @@
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
+
 
 # This file is used by EnableLanguage in cmGlobalGenerator to
-# determine that that selected ASM compiler can actually compile
-# and link the most basic of programs.   If not, a fatal error
-# is set and cmake stops processing commands and will not generate
-# any makefiles or projects.
-IF(CMAKE_ASM${ASM_DIALECT}_COMPILER)
-  SET(CMAKE_ASM${ASM_DIALECT}_COMPILER_WORKS 1 CACHE INTERNAL "")
-ELSE(CMAKE_ASM${ASM_DIALECT}_COMPILER)
-  SET(CMAKE_ASM${ASM_DIALECT}_COMPILER_WORKS 0 CACHE INTERNAL "")
-ENDIF(CMAKE_ASM${ASM_DIALECT}_COMPILER)
+# determine that the selected ASM compiler works.
+# For assembler this can only check whether the compiler has been found,
+# because otherwise there would have to be a separate assembler source file
+# for each assembler on every architecture.
+
+
+set(_ASM_COMPILER_WORKS 0)
+
+if(CMAKE_ASM${ASM_DIALECT}_COMPILER)
+  set(_ASM_COMPILER_WORKS 1)
+endif()
+
+# when using generic "ASM" support, we must have detected the compiler ID, fail otherwise:
+if("ASM${ASM_DIALECT}" STREQUAL "ASM")
+  if(NOT CMAKE_ASM${ASM_DIALECT}_COMPILER_ID)
+    set(_ASM_COMPILER_WORKS 0)
+  endif()
+endif()
+
+set(CMAKE_ASM${ASM_DIALECT}_COMPILER_WORKS ${_ASM_COMPILER_WORKS} CACHE INTERNAL "")

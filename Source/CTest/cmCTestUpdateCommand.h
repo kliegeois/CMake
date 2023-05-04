@@ -1,23 +1,18 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <utility>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmCTestUpdateCommand_h
-#define cmCTestUpdateCommand_h
+#include <cm/memory>
 
 #include "cmCTestHandlerCommand.h"
+#include "cmCommand.h"
+
+class cmCTestGenericHandler;
 
 /** \class cmCTestUpdate
  * \brief Run a ctest script
@@ -27,50 +22,22 @@
 class cmCTestUpdateCommand : public cmCTestHandlerCommand
 {
 public:
-
-  cmCTestUpdateCommand() {}
-
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone()
-    {
-    cmCTestUpdateCommand* ni = new cmCTestUpdateCommand;
+  std::unique_ptr<cmCommand> Clone() override
+  {
+    auto ni = cm::make_unique<cmCTestUpdateCommand>();
     ni->CTest = this->CTest;
     ni->CTestScriptHandler = this->CTestScriptHandler;
-    return ni;
-    }
+    return std::unique_ptr<cmCommand>(std::move(ni));
+  }
 
   /**
    * The name of the command as specified in CMakeList.txt.
    */
-  virtual const char* GetName() { return "CTEST_UPDATE";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation()
-    {
-    return "Updates the repository.";
-    }
-
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_UPDATE([SOURCE source] [RETURN_VALUE res])\n"
-      "Updates the given source directory and stores results in Update.xml. "
-      "The second argument is a variable that will hold the number of files "
-      "modified. If there is a problem, the variable will be -1.";
-    }
-
-  cmTypeMacro(cmCTestUpdateCommand, cmCTestHandlerCommand);
+  std::string GetName() const override { return "ctest_update"; }
 
 protected:
-  cmCTestGenericHandler* InitializeHandler();
+  cmCTestGenericHandler* InitializeHandler() override;
 };
-
-
-#endif

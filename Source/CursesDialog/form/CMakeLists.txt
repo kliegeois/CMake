@@ -1,11 +1,19 @@
-PROJECT(CMAKE_FORM)
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-INCLUDE_REGULAR_EXPRESSION("^.*$")
-INCLUDE_DIRECTORIES(${CURSES_INCLUDE_PATH} "${CMAKE_CURRENT_BINARY_DIR}")
+project(CMAKE_FORM)
 
-CONFIGURE_FILE(cmFormConfigure.h.in "${CMAKE_CURRENT_BINARY_DIR}/cmFormConfigure.h")
+# Disable warnings to avoid changing 3rd party code.
+if(CMAKE_C_COMPILER_ID MATCHES
+    "^(GNU|LCC|Clang|AppleClang|XLClang|XL|VisualAge|SunPro|HP|Intel|IntelLLVM|NVHPC)$")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
+elseif(CMAKE_C_COMPILER_ID STREQUAL "PathScale")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -woffall")
+endif()
 
-SET(  FORM_SRCS
+configure_file(cmFormConfigure.h.in "${CMAKE_CURRENT_BINARY_DIR}/cmFormConfigure.h")
+
+add_library(cmForm
              fld_arg.c
              fld_attr.c
              fld_current.c
@@ -46,10 +54,16 @@ SET(  FORM_SRCS
              fty_num.c
              fty_regex.c
    )
-             
-INCLUDE_DIRECTORIES(${CMAKE_FORM_SOURCE_DIR})
-ADD_LIBRARY(cmForm ${FORM_SRCS} )
-TARGET_LINK_LIBRARIES(cmForm ${CURSES_LIBRARY})
-IF(CURSES_EXTRA_LIBRARY)
-  TARGET_LINK_LIBRARIES(cmForm ${CURSES_EXTRA_LIBRARY})
-ENDIF(CURSES_EXTRA_LIBRARY)
+
+target_include_directories(cmForm
+  PUBLIC
+    ${CURSES_INCLUDE_PATH}
+    ${CMAKE_FORM_BINARY_DIR}
+    ${CMAKE_FORM_SOURCE_DIR}
+  )
+
+target_link_libraries(cmForm ${CURSES_LIBRARY})
+
+if(CURSES_EXTRA_LIBRARY)
+  target_link_libraries(cmForm ${CURSES_EXTRA_LIBRARY})
+endif()

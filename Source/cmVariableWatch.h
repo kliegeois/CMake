@@ -1,23 +1,13 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmVariableWatch_h
-#define cmVariableWatch_h
-
-#include "cmStandardIncludes.h"
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
 
 class cmMakefile;
 
@@ -29,8 +19,9 @@ class cmMakefile;
 class cmVariableWatch
 {
 public:
-  typedef void (*WatchMethod)(const std::string& variable, int access_type,
-    void* client_data, const char* newValue, const cmMakefile* mf);
+  using WatchMethod = void (*)(const std::string&, int, void*, const char*,
+                               const cmMakefile*);
+  using DeleteData = void (*)(void*);
 
   cmVariableWatch();
   ~cmVariableWatch();
@@ -38,48 +29,54 @@ public:
   /**
    * Add watch to the variable
    */
-  void AddWatch(const std::string& variable, WatchMethod method,
-                void* client_data=0);
-  void RemoveWatch(const std::string& variable, WatchMethod method);
-  
+  bool AddWatch(const std::string& variable, WatchMethod method,
+                void* client_data = nullptr, DeleteData delete_data = nullptr);
+  void RemoveWatch(const std::string& variable, WatchMethod method,
+                   void* client_data = nullptr);
+
   /**
    * This method is called when variable is accessed
    */
-  void VariableAccessed(const std::string& variable, int access_type,
-    const char* newValue, const cmMakefile* mf) const;
+  bool VariableAccessed(const std::string& variable, int access_type,
+                        const char* newValue, const cmMakefile* mf) const;
 
   /**
    * Different access types.
    */
   enum
-    {
-    VARIABLE_READ_ACCESS = 0,
+  {
+    VARIABLE_READ_ACCESS,
     UNKNOWN_VARIABLE_READ_ACCESS,
     UNKNOWN_VARIABLE_DEFINED_ACCESS,
-    ALLOWED_UNKNOWN_VARIABLE_READ_ACCESS,
     VARIABLE_MODIFIED_ACCESS,
     VARIABLE_REMOVED_ACCESS,
     NO_ACCESS
-    };
+  };
 
   /**
    * Return the access as string
    */
-  static const char* GetAccessAsString(int access_type);
-  
+  static const std::string& GetAccessAsString(int access_type);
+
 protected:
   struct Pair
   {
-    WatchMethod Method;
-    void*        ClientData;
-    Pair() : Method(0), ClientData(0) {}
+    WatchMethod Method = nullptr;
+    void* ClientData = nullptr;
+    DeleteData DeleteDataCall = nullptr;
+    ~Pair()
+    {
+      if (this->DeleteDataCall && this->ClientData) {
+        this->DeleteDataCall(this->ClientData);
+      }
+    }
+    Pair() = default;
+    Pair(const Pair&) = delete;
+    Pair& operator=(const Pair&) = delete;
   };
 
-  typedef std::vector< Pair > VectorOfPairs;
-  typedef std::map<cmStdString, VectorOfPairs > StringToVectorOfPairs;
+  using VectorOfPairs = std::vector<std::shared_ptr<Pair>>;
+  using StringToVectorOfPairs = std::map<std::string, VectorOfPairs>;
 
   StringToVectorOfPairs WatchMap;
 };
-
-
-#endif

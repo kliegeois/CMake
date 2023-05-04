@@ -1,23 +1,19 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <utility>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmCTestCoverageCommand_h
-#define cmCTestCoverageCommand_h
+#include <cm/memory>
 
 #include "cmCTestHandlerCommand.h"
+#include "cmCommand.h"
+
+class cmCTestGenericHandler;
 
 /** \class cmCTestCoverage
  * \brief Run a ctest script
@@ -27,51 +23,27 @@
 class cmCTestCoverageCommand : public cmCTestHandlerCommand
 {
 public:
-
-  cmCTestCoverageCommand() {}
-
   /**
    * This is a virtual constructor for the command.
    */
-  virtual cmCommand* Clone()
-    {
-    cmCTestCoverageCommand* ni = new cmCTestCoverageCommand;
+  std::unique_ptr<cmCommand> Clone() override
+  {
+    auto ni = cm::make_unique<cmCTestCoverageCommand>();
     ni->CTest = this->CTest;
     ni->CTestScriptHandler = this->CTestScriptHandler;
-    return ni;
-    }
+    return std::unique_ptr<cmCommand>(std::move(ni));
+  }
 
   /**
    * The name of the command as specified in CMakeList.txt.
    */
-  virtual const char* GetName() { return "CTEST_COVERAGE";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation()
-    {
-    return "Tests the repository.";
-    }
-
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_COVERAGE([BUILD build_dir] [RETURN_VALUE res])\n"
-      "Perform the coverage of the given build directory and stores results "
-      "in Coverage.xml. The second argument is a variable that will hold "
-      "value.";
-    }
-
-  cmTypeMacro(cmCTestCoverageCommand, cmCTestHandlerCommand);
+  std::string GetName() const override { return "ctest_coverage"; }
 
 protected:
-  cmCTestGenericHandler* InitializeHandler();
+  void BindArguments() override;
+  void CheckArguments(std::vector<std::string> const& keywords) override;
+  cmCTestGenericHandler* InitializeHandler() override;
+
+  bool LabelsMentioned;
+  std::vector<std::string> Labels;
 };
-
-
-#endif
-

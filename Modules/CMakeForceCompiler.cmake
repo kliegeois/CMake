@@ -1,62 +1,114 @@
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-# These are macros intended to be used only when crosscompiling in the 
-# toolchain-file and only if the compiler is not able to link an 
-# executable by default (usually because they need user-specific 
-# linker files which describe the layout of the target memory).
-#
-# It offers the following macros:
-#
-# macro CMAKE_FORCE_SYSTEM(name version processor)
-#   Set CMAKE_SYSTEM_NAME, CMAKE_SYSTEM_VERSION and CMAKE_SYSTEM_PROCESSOR
-#
-# macro CMAKE_FORCE_C_COMPILER(compiler compiler_id sizeof_void_p)
-#   Set CMAKE_C_COMPILER to the given compiler and set CMAKE_C_COMPILER_ID
-#   to the given compiler_id. This Id is used by cmake to construct the filename
-#   of the system-compiler.cmake file. For C also the size of a void-pointer
-#   has to be predefined.
-#
-# macro CMAKE_FORCE_CXX_COMPILER(compiler compiler_id)
-#   The same as CMAKE_FORCE_C_COMPILER, but for CXX. Here the size of 
-#   the void pointer is not requried.
-#
-# So a simple toolchain file could look like this:
-#
-# INCLUDE (CMakeForceCompiler)
-# CMAKE_FORCE_SYSTEM ("Generic"   "0.0"   "hc12")
-# CMAKE_FORCE_C_COMPILER   (chc12 FreescaleCHC12  2)
-# CMAKE_FORCE_CXX_COMPILER (chc12 FreescaleCHC12)
+#[=======================================================================[.rst:
+CMakeForceCompiler
+------------------
 
+.. deprecated:: 3.6
 
-MACRO(CMAKE_FORCE_SYSTEM name version proc)
-   SET(CMAKE_SYSTEM_NAME "${name}")
-   SET(CMAKE_SYSTEM_VERSION "${version}")
-   SET(CMAKE_SYSTEM_PROCESSOR "${proc}")
-ENDMACRO(CMAKE_FORCE_SYSTEM)
+  Do not use.
 
-MACRO(CMAKE_FORCE_C_COMPILER compiler id sizeof_void)
-  SET(CMAKE_C_COMPILER "${compiler}")
-  SET(CMAKE_C_COMPILER_ID_RUN TRUE)
-  SET(CMAKE_C_COMPILER_ID ${id})
-  SET(CMAKE_C_COMPILER_WORKS TRUE)
+The macros provided by this module were once intended for use by
+cross-compiling toolchain files when CMake was not able to automatically
+detect the compiler identification.  Since the introduction of this module,
+CMake's compiler identification capabilities have improved and can now be
+taught to recognize any compiler.  Furthermore, the suite of information
+CMake detects from a compiler is now too extensive to be provided by
+toolchain files using these macros.
 
-  # Set old compiler and platform id variables.
-  IF("${CMAKE_C_COMPILER_ID}" MATCHES "GNU")
-    SET(CMAKE_COMPILER_IS_GNUCC 1)
-  ENDIF("${CMAKE_C_COMPILER_ID}" MATCHES "GNU")
+One common use case for this module was to skip CMake's checks for a
+working compiler when using a cross-compiler that cannot link binaries
+without special flags or custom linker scripts.  This case is now supported
+by setting the :variable:`CMAKE_TRY_COMPILE_TARGET_TYPE` variable in the
+toolchain file instead.
 
-  SET(CMAKE_SIZEOF_VOID_P ${sizeof_void} CACHE STRING "sizeof void")
-  SET(HAVE_CMAKE_SIZEOF_VOID_P TRUE CACHE INTERNAL "have sizeof void")
-ENDMACRO(CMAKE_FORCE_C_COMPILER)
+-------------------------------------------------------------------------
 
-MACRO(CMAKE_FORCE_CXX_COMPILER compiler id)
-  SET(CMAKE_CXX_COMPILER "${compiler}")
-  SET(CMAKE_CXX_COMPILER_ID_RUN TRUE)
-  SET(CMAKE_CXX_COMPILER_ID ${id})
-  SET(CMAKE_CXX_COMPILER_WORKS TRUE)
+Macro ``CMAKE_FORCE_C_COMPILER`` has the following signature:
 
-  IF("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-    SET(CMAKE_COMPILER_IS_GNUCXX 1)
-  ENDIF("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
+::
 
-ENDMACRO(CMAKE_FORCE_CXX_COMPILER)
+   CMAKE_FORCE_C_COMPILER(<compiler> <compiler-id>)
 
+It sets :variable:`CMAKE_C_COMPILER <CMAKE_<LANG>_COMPILER>` to
+the given compiler and the cmake internal variable
+:variable:`CMAKE_C_COMPILER_ID <CMAKE_<LANG>_COMPILER_ID>` to the given
+compiler-id.  It also bypasses the check for working compiler and basic
+compiler information tests.
+
+Macro ``CMAKE_FORCE_CXX_COMPILER`` has the following signature:
+
+::
+
+   CMAKE_FORCE_CXX_COMPILER(<compiler> <compiler-id>)
+
+It sets :variable:`CMAKE_CXX_COMPILER <CMAKE_<LANG>_COMPILER>` to
+the given compiler and the cmake internal variable
+:variable:`CMAKE_CXX_COMPILER_ID <CMAKE_<LANG>_COMPILER_ID>` to the given
+compiler-id.  It also bypasses the check for working compiler and basic
+compiler information tests.
+
+Macro ``CMAKE_FORCE_Fortran_COMPILER`` has the following signature:
+
+::
+
+   CMAKE_FORCE_Fortran_COMPILER(<compiler> <compiler-id>)
+
+It sets :variable:`CMAKE_Fortran_COMPILER <CMAKE_<LANG>_COMPILER>` to
+the given compiler and the cmake internal variable
+:variable:`CMAKE_Fortran_COMPILER_ID <CMAKE_<LANG>_COMPILER_ID>` to the given
+compiler-id.  It also bypasses the check for working compiler and basic
+compiler information tests.
+
+So a simple toolchain file could look like this:
+
+::
+
+   include (CMakeForceCompiler)
+   set(CMAKE_SYSTEM_NAME Generic)
+   CMAKE_FORCE_C_COMPILER   (chc12 MetrowerksHicross)
+   CMAKE_FORCE_CXX_COMPILER (chc12 MetrowerksHicross)
+#]=======================================================================]
+
+macro(CMAKE_FORCE_C_COMPILER compiler id)
+  message(DEPRECATION "The CMAKE_FORCE_C_COMPILER macro is deprecated.  "
+    "Instead just set CMAKE_C_COMPILER and allow CMake to identify the compiler.")
+  set(CMAKE_C_COMPILER "${compiler}")
+  set(CMAKE_C_COMPILER_ID_RUN TRUE)
+  set(CMAKE_C_COMPILER_ID ${id})
+  set(CMAKE_C_COMPILER_FORCED TRUE)
+
+  # Set old compiler id variables.
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU")
+    set(CMAKE_COMPILER_IS_GNUCC 1)
+  endif()
+endmacro()
+
+macro(CMAKE_FORCE_CXX_COMPILER compiler id)
+  message(DEPRECATION "The CMAKE_FORCE_CXX_COMPILER macro is deprecated.  "
+    "Instead just set CMAKE_CXX_COMPILER and allow CMake to identify the compiler.")
+  set(CMAKE_CXX_COMPILER "${compiler}")
+  set(CMAKE_CXX_COMPILER_ID_RUN TRUE)
+  set(CMAKE_CXX_COMPILER_ID ${id})
+  set(CMAKE_CXX_COMPILER_FORCED TRUE)
+
+  # Set old compiler id variables.
+  if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
+    set(CMAKE_COMPILER_IS_GNUCXX 1)
+  endif()
+endmacro()
+
+macro(CMAKE_FORCE_Fortran_COMPILER compiler id)
+  message(DEPRECATION "The CMAKE_FORCE_Fortran_COMPILER macro is deprecated.  "
+    "Instead just set CMAKE_Fortran_COMPILER and allow CMake to identify the compiler.")
+  set(CMAKE_Fortran_COMPILER "${compiler}")
+  set(CMAKE_Fortran_COMPILER_ID_RUN TRUE)
+  set(CMAKE_Fortran_COMPILER_ID ${id})
+  set(CMAKE_Fortran_COMPILER_FORCED TRUE)
+
+  # Set old compiler id variables.
+  if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+    set(CMAKE_COMPILER_IS_GNUG77 1)
+  endif()
+endmacro()

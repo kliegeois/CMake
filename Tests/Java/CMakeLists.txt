@@ -1,41 +1,32 @@
-PROJECT(hello Java)
-SET(CMAKE_VERBOSE_MAKEFILE 1)
-  
-IF("${hello_SOURCE_DIR}" STREQUAL "${hello_BINARY_DIR}")
-  MESSAGE("In Source, building Java using ADD_CUSTOM_COMMAND()")
-  SET(OLD_CUSTOM_COMMAND_WAY 1)
-ELSE("${hello_SOURCE_DIR}" STREQUAL "${hello_BINARY_DIR}")
-  MESSAGE("Out of source, using built-in Java support")
-  SET(OLD_CUSTOM_COMMAND_WAY )
-ENDIF("${hello_SOURCE_DIR}" STREQUAL "${hello_BINARY_DIR}")
+project(hello Java)
 
-IF(NOT OLD_CUSTOM_COMMAND_WAY)
+cmake_minimum_required (VERSION 2.8.12)
+set(CMAKE_VERBOSE_MAKEFILE 1)
 
-  INCLUDE_DIRECTORIES(${hello_SOURCE_DIR}
-    ${hello_BINARY_DIR} )
-  ADD_LIBRARY(hello A.java HelloWorld.java)
+include(CTest)
 
-ELSE(NOT OLD_CUSTOM_COMMAND_WAY)
+find_package(Java COMPONENTS Development)
+include (UseJava)
 
-  ADD_CUSTOM_COMMAND(
-    OUTPUT ${hello_BINARY_DIR}/A.class
-    MAIN_DEPENDENCY ${hello_SOURCE_DIR}/A.java
-    COMMAND ${CMAKE_Java_COMPILER} ARGS -classpath . -d ${hello_BINARY_DIR} ${hello_SOURCE_DIR}/A.java)
-  ADD_CUSTOM_COMMAND(
-    OUTPUT ${hello_BINARY_DIR}/HelloWorld.class
-    MAIN_DEPENDENCY ${hello_SOURCE_DIR}/HelloWorld.java
-    DEPENDS ${hello_BINARY_DIR}/A.class
-    COMMAND ${CMAKE_Java_COMPILER} ARGS -classpath . -d ${hello_BINARY_DIR} ${hello_SOURCE_DIR}/HelloWorld.java)
-  ADD_CUSTOM_COMMAND(
-    OUTPUT ${hello_BINARY_DIR}/hello.jar
-    DEPENDS ${hello_BINARY_DIR}/A.class ${hello_BINARY_DIR}/HelloWorld.class
-    COMMAND ${CMAKE_COMMAND}
-    ARGS -E chdir ${CMAKE_CURRENT_BINARY_DIR}
-    ${CMAKE_Java_ARCHIVE}
-    -cvf hello.jar *.class)
-  
-  ADD_CUSTOM_TARGET(hello_jar ALL 
-    DEPENDS ${hello_BINARY_DIR}/hello.jar)
+add_jar(hello A.java HelloWorld.java)
 
-ENDIF(NOT OLD_CUSTOM_COMMAND_WAY)
+# use listing file to specify sources
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/java_fileslist "A.java\nHelloWorld.java\n")
+add_jar(hello2 @${CMAKE_CURRENT_BINARY_DIR}/java_fileslist)
 
+# use listing file to specify sources and specify output directory (issue #17316)
+add_jar(hello3 @${CMAKE_CURRENT_BINARY_DIR}/java_fileslist OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/hello3")
+
+add_jar(ResourceNS
+        SOURCES ResourceNS.java
+        RESOURCES NAMESPACE ns/ns1 HelloWorld.txt
+                  NAMESPACE ns/ns2 HelloWorld.txt) # add a second namespace
+
+add_test (NAME Java.Jar
+          COMMAND "${Java_JAVA_EXECUTABLE}" -classpath hello.jar HelloWorld)
+add_test (NAME Java.JarSourceList
+          COMMAND "${Java_JAVA_EXECUTABLE}" -classpath hello2.jar HelloWorld)
+add_test (NAME Java.JarSourceListAndOutput
+          COMMAND "${Java_JAVA_EXECUTABLE}" -classpath "${CMAKE_CURRENT_BINARY_DIR}/hello3/hello3.jar" HelloWorld)
+add_test (NAME Java.JarResourceNS
+          COMMAND "${Java_JAVA_EXECUTABLE}" -classpath ResourceNS.jar ResourceNS)

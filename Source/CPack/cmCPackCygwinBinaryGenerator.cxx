@@ -1,76 +1,39 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCPackCygwinBinaryGenerator.h"
 
-#include "cmake.h"
-#include "cmGlobalGenerator.h"
-#include "cmLocalGenerator.h"
-#include "cmSystemTools.h"
-#include "cmMakefile.h"
-#include "cmGeneratedFileStream.h"
+#include "cmsys/SystemTools.hxx"
+
 #include "cmCPackLog.h"
+#include "cmGeneratedFileStream.h"
+#include "cmGlobalGenerator.h"
+#include "cmMakefile.h"
+#include "cmSystemTools.h"
+#include "cmValue.h"
+#include "cmake.h"
 
-#include <cmsys/SystemTools.hxx>
-
-//----------------------------------------------------------------------
 cmCPackCygwinBinaryGenerator::cmCPackCygwinBinaryGenerator()
-{
-  this->Compress = false;
-}
-
-//----------------------------------------------------------------------
-cmCPackCygwinBinaryGenerator::~cmCPackCygwinBinaryGenerator()
+  : cmCPackArchiveGenerator(cmArchiveWrite::CompressBZip2, "paxr", ".tar.bz2")
 {
 }
 
-//----------------------------------------------------------------------
+cmCPackCygwinBinaryGenerator::~cmCPackCygwinBinaryGenerator() = default;
+
 int cmCPackCygwinBinaryGenerator::InitializeInternal()
 {
   this->SetOptionIfNotSet("CPACK_PACKAGING_INSTALL_PREFIX", "/usr");
   this->SetOptionIfNotSet("CPACK_INCLUDE_TOPLEVEL_DIRECTORY", "0");
-  std::vector<std::string> path;
-  std::string pkgPath = cmSystemTools::FindProgram("bzip2", path, false);
-  if ( pkgPath.empty() )
-    {
-    cmCPackLogger(cmCPackLog::LOG_ERROR, "Cannot find BZip2" << std::endl);
-    return 0;
-    }
-  this->SetOptionIfNotSet("CPACK_INSTALLER_PROGRAM", pkgPath.c_str());
-  cmCPackLogger(cmCPackLog::LOG_VERBOSE, "Found Compress program: "
-    << pkgPath.c_str()
-    << std::endl);
-
   return this->Superclass::InitializeInternal();
 }
 
-//----------------------------------------------------------------------
-int cmCPackCygwinBinaryGenerator::CompressFiles(const char* outFileName,
-  const char* toplevel, const std::vector<std::string>& files)
+int cmCPackCygwinBinaryGenerator::PackageFiles()
 {
-  std::string packageName = this->GetOption("CPACK_PACKAGE_NAME");
-  packageName += "-";
-  packageName += this->GetOption("CPACK_PACKAGE_VERSION");
+  std::string packageName =
+    cmStrCat(this->GetOption("CPACK_PACKAGE_NAME"), '-',
+             this->GetOption("CPACK_PACKAGE_VERSION"));
   packageName = cmsys::SystemTools::LowerCase(packageName);
-  std::string manifest = "/usr/share/doc/";
-  manifest += packageName;
-  manifest += "/MANIFEST";
-  std::string manifestFile 
-    = this->GetOption("CPACK_TEMPORARY_DIRECTORY");
+  std::string manifest = cmStrCat("/usr/share/doc/", packageName, "/MANIFEST");
+  std::string manifestFile = this->GetOption("CPACK_TEMPORARY_DIRECTORY");
   // Create a MANIFEST file that contains all of the files in
   // the tar file
   std::string tempdir = manifestFile;
@@ -78,27 +41,32 @@ int cmCPackCygwinBinaryGenerator::CompressFiles(const char* outFileName,
   // create an extra scope to force the stream
   // to create the file before the super class is called
   {
-  cmGeneratedFileStream ofs(manifestFile.c_str());
-  for(std::vector<std::string>::const_iterator i = files.begin();
-      i != files.end(); ++i)
-    {
-    // remove the temp dir and replace with /usr
-    ofs << (*i).substr(tempdir.size()) << "\n";
+    cmGeneratedFileStream ofs(manifestFile);
+    for (std::string const& file : files) {
+      // remove the temp dir and replace with /usr
+      ofs << file.substr(tempdir.size()) << "\n";
     }
-  ofs << manifest << "\n";
+    ofs << manifest << "\n";
   }
   // add the manifest file to the list of all files
-  std::vector<std::string> filesWithManifest = files;
-  filesWithManifest.push_back(manifestFile);
-  // create the bzip2 tar file 
-  return this->Superclass::CompressFiles(outFileName, toplevel, 
-                                         filesWithManifest);
+  files.push_back(manifestFile);
+
+  // create the bzip2 tar file
+  return this->Superclass::PackageFiles();
 }
 
 const char* cmCPackCygwinBinaryGenerator::GetOutputExtension()
 {
   this->OutputExtension = "-";
-  this->OutputExtension += this->GetOption("CPACK_CYGWIN_PATCH_NUMBER");
+  cmValue patchNumber = this->GetOption("CPACK_CYGWIN_PATCH_NUMBER");
+  if (!patchNumber) {
+    this->OutputExtension += "1";
+    cmCPackLogger(cmCPackLog::LOG_WARNING,
+                  "CPACK_CYGWIN_PATCH_NUMBER not specified using 1"
+                    << std::endl);
+  } else {
+    this->OutputExtension += patchNumber;
+  }
   this->OutputExtension += ".tar.bz2";
   return this->OutputExtension.c_str();
 }

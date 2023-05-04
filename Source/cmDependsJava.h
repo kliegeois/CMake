@@ -1,28 +1,19 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmDependsJava_h
-#define cmDependsJava_h
+#include <iosfwd>
+#include <set>
+#include <string>
 
 #include "cmDepends.h"
 
 /** \class cmDependsJava
  * \brief Dependency scanner for Java class files.
  */
-class cmDependsJava: public cmDepends
+class cmDependsJava : public cmDepends
 {
 public:
   /** Checking instances need to know the build directory name and the
@@ -30,17 +21,17 @@ public:
   cmDependsJava();
 
   /** Virtual destructor to cleanup subclasses properly.  */
-  virtual ~cmDependsJava();
+  ~cmDependsJava() override;
+
+  cmDependsJava(cmDependsJava const&) = delete;
+  cmDependsJava& operator=(cmDependsJava const&) = delete;
 
 protected:
   // Implement writing/checking methods required by superclass.
-  virtual bool WriteDependencies(const char *src, const char *file,
-    std::ostream& makeDepends, std::ostream& internalDepends);
-  virtual bool CheckDependencies(std::istream& internalDepends);
-
-private:
-  cmDependsJava(cmDependsJava const&); // Purposely not implemented.
-  void operator=(cmDependsJava const&); // Purposely not implemented.
+  bool WriteDependencies(const std::set<std::string>& sources,
+                         const std::string& file, std::ostream& makeDepends,
+                         std::ostream& internalDepends) override;
+  bool CheckDependencies(std::istream& internalDepends,
+                         const std::string& internalDependsFileName,
+                         DependencyMap& validDeps) override;
 };
-
-#endif

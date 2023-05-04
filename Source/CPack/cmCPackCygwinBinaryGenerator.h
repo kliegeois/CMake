@@ -1,44 +1,26 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
-#ifndef cmCPackCygwinBinaryGenerator_h
-#define cmCPackCygwinBinaryGenerator_h
-
-#include "cmCPackTarBZip2Generator.h"
+#include "cmCPackArchiveGenerator.h"
 
 /** \class cmCPackCygwinBinaryGenerator
  * \brief A generator for TarBZip2 files
  */
-class cmCPackCygwinBinaryGenerator : public cmCPackTarBZip2Generator
+class cmCPackCygwinBinaryGenerator : public cmCPackArchiveGenerator
 {
 public:
-  cmCPackTypeMacro(cmCPackCygwinBinaryGenerator, cmCPackTarBZip2Generator);
+  cmCPackTypeMacro(cmCPackCygwinBinaryGenerator, cmCPackArchiveGenerator);
 
   /**
    * Construct generator
    */
   cmCPackCygwinBinaryGenerator();
-  virtual ~cmCPackCygwinBinaryGenerator();
+  ~cmCPackCygwinBinaryGenerator() override;
+
 protected:
-  virtual int InitializeInternal();
-  int CompressFiles(const char* outFileName, const char* toplevel,
-    const std::vector<std::string>& files);
-  virtual const char* GetOutputExtension();
+  int InitializeInternal() override;
+  int PackageFiles() override;
+  const char* GetOutputExtension() override;
   std::string OutputExtension;
 };
-
-#endif

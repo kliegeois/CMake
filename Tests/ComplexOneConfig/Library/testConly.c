@@ -1,4 +1,5 @@
 #include "testConly.h"
+
 #include <stdio.h>
 
 int CsharedFunction()
@@ -7,7 +8,7 @@ int CsharedFunction()
   printf("TEST_C_FLAGS failed\n");
   return 0;
 #else
-  printf("Passed: TEST_C_FLAGS passed\n");  
-#endif  
+  printf("Passed: TEST_C_FLAGS passed\n");
+#endif
   return 1;
 }

@@ -1,660 +1,207 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmIfCommand.h"
-#include "cmStringCommand.h"
 
-#include <stdlib.h> // required for atof
-#include <list>
-#include <cmsys/RegularExpression.hxx>
+#include <string>
+#include <utility>
 
-bool cmIfFunctionBlocker::
-IsFunctionBlocked(const cmListFileFunction& lff, cmMakefile &mf)
+#include <cm/memory>
+#include <cm/string_view>
+#include <cmext/string_view>
+
+#include "cmConditionEvaluator.h"
+#include "cmExecutionStatus.h"
+#include "cmExpandedCommandArgument.h"
+#include "cmFunctionBlocker.h"
+#include "cmListFileCache.h"
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmOutputConverter.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
+#include "cmake.h"
+
+static std::string cmIfCommandError(
+  std::vector<cmExpandedCommandArgument> const& args)
 {
-  // if we are blocking then all we need to do is keep track of 
-  // scope depth of nested if statements
-  if (this->IsBlocking)
-    {
-    if (!cmSystemTools::Strucmp(lff.Name.c_str(),"if"))
-      {
-      this->ScopeDepth++;
-      return true;
-      }
-    }
+  std::string err = "given arguments:\n ";
+  for (cmExpandedCommandArgument const& i : args) {
+    err += " ";
+    err += cmOutputConverter::EscapeForCMake(i.GetValue());
+  }
+  err += "\n";
+  return err;
+}
 
-  if (this->IsBlocking && this->ScopeDepth)
-    {
-    if (!cmSystemTools::Strucmp(lff.Name.c_str(),"endif"))
-      {
-      this->ScopeDepth--;
-      }
-    return true;
+class cmIfFunctionBlocker : public cmFunctionBlocker
+{
+public:
+  cm::string_view StartCommandName() const override { return "if"_s; }
+  cm::string_view EndCommandName() const override { return "endif"_s; }
+
+  bool ArgumentsMatch(cmListFileFunction const& lff,
+                      cmMakefile&) const override;
+
+  bool Replay(std::vector<cmListFileFunction> functions,
+              cmExecutionStatus& inStatus) override;
+
+  std::vector<cmListFileArgument> Args;
+  bool IsBlocking;
+  bool HasRun = false;
+  bool ElseSeen = false;
+};
+
+bool cmIfFunctionBlocker::ArgumentsMatch(cmListFileFunction const& lff,
+                                         cmMakefile&) const
+{
+  return lff.Arguments().empty() || lff.Arguments() == this->Args;
+}
+
+bool cmIfFunctionBlocker::Replay(std::vector<cmListFileFunction> functions,
+                                 cmExecutionStatus& inStatus)
+{
+  cmMakefile& mf = inStatus.GetMakefile();
+  // execute the functions for the true parts of the if statement
+  int scopeDepth = 0;
+  for (cmListFileFunction const& func : functions) {
+    // keep track of scope depth
+    if (func.LowerCaseName() == "if") {
+      scopeDepth++;
     }
-      
-  // watch for our ELSE or ENDIF
-  if (!cmSystemTools::Strucmp(lff.Name.c_str(),"else") ||
-      !cmSystemTools::Strucmp(lff.Name.c_str(),"elseif") ||
-      !cmSystemTools::Strucmp(lff.Name.c_str(),"endif"))
-    {
-    // if it was an else statement then we should change state
-    // and block this Else Command
-    if (!cmSystemTools::Strucmp(lff.Name.c_str(),"else"))
-      {
-      this->IsBlocking = this->HasRun;
-      return true;
+    if (func.LowerCaseName() == "endif") {
+      scopeDepth--;
+    }
+    // watch for our state change
+    if (scopeDepth == 0 && func.LowerCaseName() == "else") {
+
+      if (this->ElseSeen) {
+        cmListFileBacktrace elseBT = mf.GetBacktrace().Push(cmListFileContext{
+          func.OriginalName(), this->GetStartingContext().FilePath,
+          func.Line() });
+        mf.GetCMakeInstance()->IssueMessage(
+          MessageType::FATAL_ERROR,
+          "A duplicate ELSE command was found inside an IF block.", elseBT);
+        cmSystemTools::SetFatalErrorOccured();
+        return true;
       }
-    // if it was an elseif statement then we should check state
-    // and possibly block this Else Command
-    if (!cmSystemTools::Strucmp(lff.Name.c_str(),"elseif"))
-      {
-      if (!this->HasRun)
-        {
-        char* errorString = 0;
-        
-        std::vector<std::string> expandedArguments;
-        mf.ExpandArguments(lff.Arguments, expandedArguments);
-        bool isTrue = 
-          cmIfCommand::IsTrue(expandedArguments,&errorString,&mf);
-        
-        if (errorString)
-          {
-          std::string err = "had incorrect arguments: ";
-          unsigned int i;
-          for(i =0; i < lff.Arguments.size(); ++i)
-            {
-            err += (lff.Arguments[i].Quoted?"\"":"");
-            err += lff.Arguments[i].Value;
-            err += (lff.Arguments[i].Quoted?"\"":"");
-            err += " ";
-            }
-          err += "(";
-          err += errorString;
-          err += ").";
-          cmSystemTools::Error(err.c_str());
-          delete [] errorString;
-          return false;
+
+      this->IsBlocking = this->HasRun;
+      this->HasRun = true;
+      this->ElseSeen = true;
+
+      // if trace is enabled, print a (trivially) evaluated "else"
+      // statement
+      if (!this->IsBlocking && mf.GetCMakeInstance()->GetTrace()) {
+        mf.PrintCommandTrace(func);
+      }
+    } else if (scopeDepth == 0 && func.LowerCaseName() == "elseif") {
+      cmListFileBacktrace elseifBT = mf.GetBacktrace().Push(
+        cmListFileContext{ func.OriginalName(),
+                           this->GetStartingContext().FilePath, func.Line() });
+      if (this->ElseSeen) {
+        mf.GetCMakeInstance()->IssueMessage(
+          MessageType::FATAL_ERROR,
+          "An ELSEIF command was found after an ELSE command.", elseifBT);
+        cmSystemTools::SetFatalErrorOccured();
+        return true;
+      }
+
+      if (this->HasRun) {
+        this->IsBlocking = true;
+      } else {
+        // if trace is enabled, print the evaluated "elseif" statement
+        if (mf.GetCMakeInstance()->GetTrace()) {
+          mf.PrintCommandTrace(func);
+        }
+
+        std::string errorString;
+
+        std::vector<cmExpandedCommandArgument> expandedArguments;
+        mf.ExpandArguments(func.Arguments(), expandedArguments);
+
+        MessageType messType;
+
+        cmConditionEvaluator conditionEvaluator(mf, elseifBT);
+
+        bool isTrue =
+          conditionEvaluator.IsTrue(expandedArguments, errorString, messType);
+
+        if (!errorString.empty()) {
+          std::string err =
+            cmStrCat(cmIfCommandError(expandedArguments), errorString);
+          mf.GetCMakeInstance()->IssueMessage(messType, err, elseifBT);
+          if (messType == MessageType::FATAL_ERROR) {
+            cmSystemTools::SetFatalErrorOccured();
+            return true;
           }
-        
-        if (isTrue)
-          {
+        }
+
+        if (isTrue) {
           this->IsBlocking = false;
           this->HasRun = true;
-          return true;
-          }
-        }
-      this->IsBlocking = true;
-      return true;
-      }
-    // otherwise it must be an ENDIF statement, in that case remove the
-    // function blocker
-    mf.RemoveFunctionBlocker(lff);
-    return true;
-    }
-  
-  return this->IsBlocking;
-}
-
-bool cmIfFunctionBlocker::ShouldRemove(const cmListFileFunction& lff,
-                                       cmMakefile& mf)
-{
-  if (!cmSystemTools::Strucmp(lff.Name.c_str(),"endif"))
-    {
-    if (cmSystemTools::IsOn
-        (mf.GetPropertyOrDefinition("CMAKE_ALLOW_LOOSE_LOOP_CONSTRUCTS"))
-        || lff.Arguments == this->Args)
-      {
-      return true;
-      }
-    }
-
-  return false;
-}
-
-void cmIfFunctionBlocker::
-ScopeEnded(cmMakefile &mf)
-{
-  std::string errmsg = "The end of a CMakeLists file was reached with an "
-    "IF statement that was not closed properly.\nWithin the directory: ";
-  errmsg += mf.GetCurrentDirectory();
-  errmsg += "\nThe arguments are: ";
-  for(std::vector<cmListFileArgument>::const_iterator j = this->Args.begin();
-      j != this->Args.end(); ++j)
-    {   
-    errmsg += (j->Quoted?"\"":"");
-    errmsg += j->Value;
-    errmsg += (j->Quoted?"\"":"");
-    errmsg += " ";
-    }
-  cmSystemTools::Message(errmsg.c_str(), "Warning");
-}
-
-bool cmIfCommand
-::InvokeInitialPass(const std::vector<cmListFileArgument>& args)
-{
-  char* errorString = 0;
-  
-  std::vector<std::string> expandedArguments;
-  this->Makefile->ExpandArguments(args, expandedArguments);
-  bool isTrue = 
-    cmIfCommand::IsTrue(expandedArguments,&errorString,this->Makefile);
-  
-  if (errorString)
-    {
-    std::string err = "had incorrect arguments: ";
-    unsigned int i;
-    for(i =0; i < args.size(); ++i)
-      {
-      err += (args[i].Quoted?"\"":"");
-      err += args[i].Value;
-      err += (args[i].Quoted?"\"":"");
-      err += " ";
-      }
-    err += "(";
-    err += errorString;
-    err += ").";
-    this->SetError(err.c_str());
-    delete [] errorString;
-    return false;
-    }
-  
-  cmIfFunctionBlocker *f = new cmIfFunctionBlocker();
-  // if is isn't true block the commands
-  f->IsBlocking = !isTrue;
-  if (isTrue)
-    {
-    f->HasRun = true;
-    }
-  f->Args = args;
-  this->Makefile->AddFunctionBlocker(f);
-  
-  return true;
-}
-
-namespace 
-{
-  void IncrementArguments(std::list<std::string> &newArgs,
-                          std::list<std::string>::iterator &argP1,
-                          std::list<std::string>::iterator &argP2)
-  {
-    if (argP1  != newArgs.end())
-      {
-      argP1++;
-      argP2 = argP1;
-      if (argP1  != newArgs.end())
-        {
-        argP2++;
         }
       }
+    }
+
+    // should we execute?
+    else if (!this->IsBlocking) {
+      cmExecutionStatus status(mf);
+      mf.ExecuteCommand(func, status);
+      if (status.GetReturnInvoked()) {
+        inStatus.SetReturnInvoked();
+        return true;
+      }
+      if (status.GetBreakInvoked()) {
+        inStatus.SetBreakInvoked();
+        return true;
+      }
+      if (status.GetContinueInvoked()) {
+        inStatus.SetContinueInvoked();
+        return true;
+      }
+    }
   }
-}
-
-
-// order of operations, 
-// IS_DIRECTORY EXISTS COMMAND DEFINED 
-// MATCHES LESS GREATER EQUAL STRLESS STRGREATER STREQUAL 
-// AND OR
-//
-// There is an issue on whether the arguments should be values of references,
-// for example IF (FOO AND BAR) should that compare the strings FOO and BAR
-// or should it really do IF (${FOO} AND ${BAR}) Currently IS_DIRECTORY
-// EXISTS COMMAND and DEFINED all take values. EQUAL, LESS and GREATER can
-// take numeric values or variable names. STRLESS and STRGREATER take
-// variable names but if the variable name is not found it will use the name
-// directly. AND OR take variables or the values 0 or 1.
-
-
-bool cmIfCommand::IsTrue(const std::vector<std::string> &args,
-                         char **errorString, cmMakefile *makefile)
-{
-  // check for the different signatures
-  const char *def;
-  const char *def2;
-  const char* msg = "Unknown arguments specified";
-  *errorString = new char[strlen(msg) + 1];
-  strcpy(*errorString, msg);
-
-  // handle empty invocation
-  if (args.size() < 1)
-    {
-    delete [] *errorString;
-    *errorString = 0;
-    return false;
-    }
-
-  // store the reduced args in this vector
-  std::list<std::string> newArgs;
-  int reducible;
-  unsigned int i;
-
-  // copy to the list structure
-  for(i = 0; i < args.size(); ++i)
-    {   
-    newArgs.push_back(args[i]);
-    }
-  std::list<std::string>::iterator argP1;
-  std::list<std::string>::iterator argP2;
-
-  // now loop through the arguments and see if we can reduce any of them
-  // we do this multiple times. Once for each level of precedence
-  do
-    {
-    reducible = 0;
-    std::list<std::string>::iterator arg = newArgs.begin();
-    while (arg != newArgs.end())
-      {
-      argP1 = arg;
-      IncrementArguments(newArgs,argP1,argP2);
-      // does a file exist
-      if (*arg == "EXISTS" && argP1  != newArgs.end())
-        {
-        if(cmSystemTools::FileExists((argP1)->c_str()))
-          {
-          *arg = "1";
-          }
-        else 
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-      // does a directory with this name exist
-      if (*arg == "IS_DIRECTORY" && argP1  != newArgs.end())
-        {
-        if(cmSystemTools::FileIsDirectory((argP1)->c_str()))
-          {
-          *arg = "1";
-          }
-        else 
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-      // is the given path an absolute path ?
-      if (*arg == "IS_ABSOLUTE" && argP1  != newArgs.end())
-        {
-        if(cmSystemTools::FileIsFullPath((argP1)->c_str()))
-          {
-          *arg = "1";
-          }
-        else 
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-      // does a command exist
-      if (*arg == "COMMAND" && argP1  != newArgs.end())
-        {
-        if(makefile->CommandExists((argP1)->c_str()))
-          {
-          *arg = "1";
-          }
-        else 
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-      // is a variable defined
-      if (*arg == "DEFINED" && argP1  != newArgs.end())
-        {
-        size_t argP1len = argP1->size();
-        bool bdef = false;
-        if(argP1len > 4 && argP1->substr(0, 4) == "ENV{" &&
-           argP1->operator[](argP1len-1) == '}')
-          {
-          std::string env = argP1->substr(4, argP1len-5);
-          bdef = cmSystemTools::GetEnv(env.c_str())?true:false;
-          }
-        else
-          {
-          bdef = makefile->IsDefinitionSet((argP1)->c_str());
-          }
-        if(bdef)
-          {
-          *arg = "1";
-          }
-        else 
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-      ++arg;
-      }
-    }
-  while (reducible);
-
-
-  // now loop through the arguments and see if we can reduce any of them
-  // we do this multiple times. Once for each level of precedence
-  do
-    {
-    reducible = 0;
-    std::list<std::string>::iterator arg = newArgs.begin();
-
-    while (arg != newArgs.end())
-      {
-      argP1 = arg;
-      IncrementArguments(newArgs,argP1,argP2);
-      if (argP1 != newArgs.end() && argP2 != newArgs.end() &&
-        *(argP1) == "MATCHES") 
-        {
-        def = cmIfCommand::GetVariableOrString(arg->c_str(), makefile);
-        const char* rex = (argP2)->c_str();
-        cmStringCommand::ClearMatches(makefile);
-        cmsys::RegularExpression regEntry;
-        if ( !regEntry.compile(rex) )
-          {
-          cmOStringStream error;
-          error << "Regular expression \"" << rex << "\" cannot compile";
-          delete [] *errorString;
-          *errorString = new char[error.str().size() + 1];
-          strcpy(*errorString, error.str().c_str());
-          return false;
-          }
-        if (regEntry.find(def))
-          {
-          cmStringCommand::StoreMatches(makefile, regEntry);
-          *arg = "1";
-          }
-        else
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP2);
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      if (argP1 != newArgs.end() && *arg == "MATCHES") 
-        {
-        *arg = "0";
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      if (argP1 != newArgs.end() && argP2 != newArgs.end() &&
-        (*(argP1) == "LESS" || *(argP1) == "GREATER" || 
-         *(argP1) == "EQUAL")) 
-        {
-        def = cmIfCommand::GetVariableOrString(arg->c_str(), makefile);
-        def2 = cmIfCommand::GetVariableOrString((argP2)->c_str(), makefile);
-        double lhs;
-        double rhs;
-        if(sscanf(def, "%lg", &lhs) != 1 ||
-           sscanf(def2, "%lg", &rhs) != 1)
-          {
-          *arg = "0";
-          }
-        else if (*(argP1) == "LESS")
-          {
-          if(lhs < rhs)
-            {
-            *arg = "1";
-            }
-          else
-            {
-            *arg = "0";
-            }
-          }
-        else if (*(argP1) == "GREATER")
-          {
-          if(lhs > rhs)
-            {
-            *arg = "1";
-            }
-          else
-            {
-            *arg = "0";
-            }
-          }          
-        else
-          {
-          if(lhs == rhs)
-            {
-            *arg = "1";
-            }
-          else
-            {
-            *arg = "0";
-            }
-          }          
-        newArgs.erase(argP2);
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      if (argP1 != newArgs.end() && argP2 != newArgs.end() &&
-        (*(argP1) == "STRLESS" || 
-         *(argP1) == "STREQUAL" || 
-         *(argP1) == "STRGREATER")) 
-        {
-        def = cmIfCommand::GetVariableOrString(arg->c_str(), makefile);
-        def2 = cmIfCommand::GetVariableOrString((argP2)->c_str(), makefile);
-        int val = strcmp(def,def2);
-        int result;
-        if (*(argP1) == "STRLESS")
-          {
-          result = (val < 0);
-          }
-        else if (*(argP1) == "STRGREATER")
-          {
-          result = (val > 0);
-          }
-        else // strequal
-          {
-          result = (val == 0);
-          }
-        if(result)
-          {
-          *arg = "1";
-          }
-        else
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP2);
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      // is file A newer than file B
-      if (argP1 != newArgs.end() && argP2 != newArgs.end() &&
-          *(argP1) == "IS_NEWER_THAN")
-        {
-        int fileIsNewer=0;
-        bool success=cmSystemTools::FileTimeCompare(arg->c_str(),
-            (argP2)->c_str(),
-            &fileIsNewer);
-        if(success==false || fileIsNewer==1 || fileIsNewer==0)
-          {
-          *arg = "1";
-          }
-        else
-          {
-          *arg = "0";
-          }
-        newArgs.erase(argP2);
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      ++arg;
-      }
-    }
-  while (reducible);
-
-
-  // now loop through the arguments and see if we can reduce any of them
-  // we do this multiple times. Once for each level of precedence
-  do
-    {
-    reducible = 0;
-    std::list<std::string>::iterator arg = newArgs.begin();
-    while (arg != newArgs.end())
-      {
-      argP1 = arg;
-      IncrementArguments(newArgs,argP1,argP2);
-      if (argP1 != newArgs.end() && *arg == "NOT")
-        {
-        def = cmIfCommand::GetVariableOrNumber((argP1)->c_str(), makefile);
-        if(!cmSystemTools::IsOff(def))
-          {
-          *arg = "0";
-          }
-        else
-          {
-          *arg = "1";
-          }
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-      ++arg;
-      }
-    }
-  while (reducible);
-
-  // now loop through the arguments and see if we can reduce any of them
-  // we do this multiple times. Once for each level of precedence
-  do
-    {
-    reducible = 0;
-    std::list<std::string>::iterator arg = newArgs.begin();
-    while (arg != newArgs.end())
-      {
-      argP1 = arg;
-      IncrementArguments(newArgs,argP1,argP2);
-      if (argP1 != newArgs.end() && *(argP1) == "AND" && 
-        argP2 != newArgs.end())
-        {
-        def = cmIfCommand::GetVariableOrNumber(arg->c_str(), makefile);
-        def2 = cmIfCommand::GetVariableOrNumber((argP2)->c_str(), makefile);
-        if(cmSystemTools::IsOff(def) || cmSystemTools::IsOff(def2))
-          {
-          *arg = "0";
-          }
-        else
-          {
-          *arg = "1";
-          }
-        newArgs.erase(argP2);
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      if (argP1 != newArgs.end() && *(argP1) == "OR" && 
-        argP2 != newArgs.end())
-        {
-        def = cmIfCommand::GetVariableOrNumber(arg->c_str(), makefile);
-        def2 = cmIfCommand::GetVariableOrNumber((argP2)->c_str(), makefile);
-        if(cmSystemTools::IsOff(def) && cmSystemTools::IsOff(def2))
-          {
-          *arg = "0";
-          }
-        else
-          {
-          *arg = "1";
-          }
-        newArgs.erase(argP2);
-        newArgs.erase(argP1);
-        argP1 = arg;
-        IncrementArguments(newArgs,argP1,argP2);
-        reducible = 1;
-        }
-
-      ++arg;
-      }
-    }
-  while (reducible);
-
-  // now at the end there should only be one argument left
-  if (newArgs.size() == 1)
-    {
-    delete [] *errorString;
-    *errorString = 0;
-    if (*newArgs.begin() == "0")
-      {
-      return false;
-      }
-    if (*newArgs.begin() == "1")
-      {
-      return true;
-      }
-    def = makefile->GetDefinition(args[0].c_str());
-    if(cmSystemTools::IsOff(def))
-      {
-      return false;
-      }
-    }
-
   return true;
 }
 
-const char* cmIfCommand::GetVariableOrString(const char* str,
-                                             const cmMakefile* mf)
+//=========================================================================
+bool cmIfCommand(std::vector<cmListFileArgument> const& args,
+                 cmExecutionStatus& inStatus)
 {
-  const char* def = mf->GetDefinition(str);
-  if(!def)
-    {
-    def = str;
-    }
-  return def;
-}
+  cmMakefile& makefile = inStatus.GetMakefile();
+  std::string errorString;
 
-const char* cmIfCommand::GetVariableOrNumber(const char* str,
-                                             const cmMakefile* mf)
-{
-  const char* def = mf->GetDefinition(str);
-  if(!def)
-    {
-    if (atoi(str))
-      {
-      def = str;
-      }
+  std::vector<cmExpandedCommandArgument> expandedArguments;
+  makefile.ExpandArguments(args, expandedArguments);
+
+  MessageType status;
+
+  cmConditionEvaluator conditionEvaluator(makefile, makefile.GetBacktrace());
+
+  bool isTrue =
+    conditionEvaluator.IsTrue(expandedArguments, errorString, status);
+
+  if (!errorString.empty()) {
+    std::string err =
+      cmStrCat("if ", cmIfCommandError(expandedArguments), errorString);
+    if (status == MessageType::FATAL_ERROR) {
+      makefile.IssueMessage(MessageType::FATAL_ERROR, err);
+      cmSystemTools::SetFatalErrorOccured();
+      return true;
     }
-  return def;
+    makefile.IssueMessage(status, err);
+  }
+
+  {
+    auto fb = cm::make_unique<cmIfFunctionBlocker>();
+    // if is isn't true block the commands
+    fb->IsBlocking = !isTrue;
+    if (isTrue) {
+      fb->HasRun = true;
+    }
+    fb->Args = args;
+    makefile.AddFunctionBlocker(std::move(fb));
+  }
+
+  return true;
 }

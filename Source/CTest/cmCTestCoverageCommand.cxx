@@ -1,38 +1,46 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCTestCoverageCommand.h"
 
+#include <set>
+
+#include <cmext/algorithm>
+#include <cmext/string_view>
+
 #include "cmCTest.h"
-#include "cmCTestGenericHandler.h"
+#include "cmCTestCoverageHandler.h"
+
+class cmCTestGenericHandler;
+
+void cmCTestCoverageCommand::BindArguments()
+{
+  this->cmCTestHandlerCommand::BindArguments();
+  this->Bind("LABELS"_s, this->Labels);
+}
+
+void cmCTestCoverageCommand::CheckArguments(
+  std::vector<std::string> const& keywords)
+{
+  this->LabelsMentioned =
+    !this->Labels.empty() || cm::contains(keywords, "LABELS");
+}
 
 cmCTestGenericHandler* cmCTestCoverageCommand::InitializeHandler()
 {
-  this->CTest->SetCTestConfigurationFromCMakeVariable(this->Makefile,
-    "CoverageCommand", "CTEST_COVERAGE_COMMAND");
+  this->CTest->SetCTestConfigurationFromCMakeVariable(
+    this->Makefile, "CoverageCommand", "CTEST_COVERAGE_COMMAND", this->Quiet);
+  this->CTest->SetCTestConfigurationFromCMakeVariable(
+    this->Makefile, "CoverageExtraFlags", "CTEST_COVERAGE_EXTRA_FLAGS",
+    this->Quiet);
+  cmCTestCoverageHandler* handler = this->CTest->GetCoverageHandler();
+  handler->Initialize();
 
-  cmCTestGenericHandler* handler
-    = this->CTest->GetInitializedHandler("coverage");
-  if ( !handler )
-    {
-    this->SetError("internal CTest error. Cannot instantiate test handler");
-    return 0;
-    }
+  // If a LABELS option was given, select only files with the labels.
+  if (this->LabelsMentioned) {
+    handler->SetLabelFilter(
+      std::set<std::string>(this->Labels.begin(), this->Labels.end()));
+  }
+
+  handler->SetQuiet(this->Quiet);
   return handler;
 }
-
-
-

@@ -1,11 +1,14 @@
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
+
 
 # determine the compiler to use for C++ programs
 # NOTE, a generator may set CMAKE_CXX_COMPILER before
 # loading this file to force a compiler.
-# use environment variable CXX first if defined by user, next use 
+# use environment variable CXX first if defined by user, next use
 # the cmake variable CMAKE_GENERATOR_CXX which can be defined by a generator
 # as a default compiler
-# If the internal cmake variable _CMAKE_TOOLCHAIN_PREFIX is set, this is used 
+# If the internal cmake variable _CMAKE_TOOLCHAIN_PREFIX is set, this is used
 # as prefix for the tools (e.g. arm-elf-g++, arm-elf-ar etc.)
 #
 # Sets the following variables:
@@ -17,131 +20,212 @@
 # If not already set before, it also sets
 #   _CMAKE_TOOLCHAIN_PREFIX
 
-IF(NOT CMAKE_CXX_COMPILER)
-  SET(CMAKE_CXX_COMPILER_INIT NOTFOUND)
+include(${CMAKE_ROOT}/Modules/CMakeDetermineCompiler.cmake)
 
-  # prefer the environment variable CXX
-  IF($ENV{CXX} MATCHES ".+")
-    GET_FILENAME_COMPONENT(CMAKE_CXX_COMPILER_INIT $ENV{CXX} PROGRAM PROGRAM_ARGS CMAKE_CXX_FLAGS_ENV_INIT)
-    IF(CMAKE_CXX_FLAGS_ENV_INIT)
-      SET(CMAKE_CXX_COMPILER_ARG1 "${CMAKE_CXX_FLAGS_ENV_INIT}" CACHE STRING "First argument to CXX compiler")
-    ENDIF(CMAKE_CXX_FLAGS_ENV_INIT)
-    IF(NOT EXISTS ${CMAKE_CXX_COMPILER_INIT})
-      MESSAGE(FATAL_ERROR "Could not find compiler set in environment variable CXX:\n$ENV{CXX}.\n${CMAKE_CXX_COMPILER_INIT}")
-    ENDIF(NOT EXISTS ${CMAKE_CXX_COMPILER_INIT})
-  ENDIF($ENV{CXX} MATCHES ".+")
+# Load system-specific compiler preferences for this language.
+include(Platform/${CMAKE_SYSTEM_NAME}-Determine-CXX OPTIONAL)
+include(Platform/${CMAKE_SYSTEM_NAME}-CXX OPTIONAL)
+if(NOT CMAKE_CXX_COMPILER_NAMES)
+  set(CMAKE_CXX_COMPILER_NAMES CC)
+endif()
 
-  # next prefer the generator specified compiler
-  IF(CMAKE_GENERATOR_CXX)
-    IF(NOT CMAKE_CXX_COMPILER_INIT)
-      SET(CMAKE_CXX_COMPILER_INIT ${CMAKE_GENERATOR_CXX})
-    ENDIF(NOT CMAKE_CXX_COMPILER_INIT)
-  ENDIF(CMAKE_GENERATOR_CXX)
+if(${CMAKE_GENERATOR} MATCHES "Visual Studio")
+elseif("${CMAKE_GENERATOR}" MATCHES "Green Hills MULTI")
+elseif("${CMAKE_GENERATOR}" MATCHES "Xcode")
+  set(CMAKE_CXX_COMPILER_XCODE_TYPE sourcecode.cpp.cpp)
+  _cmake_find_compiler_path(CXX)
+else()
+  if(NOT CMAKE_CXX_COMPILER)
+    set(CMAKE_CXX_COMPILER_INIT NOTFOUND)
 
-  # finally list compilers to try
-  IF(CMAKE_CXX_COMPILER_INIT)
-    SET(CMAKE_CXX_COMPILER_LIST ${CMAKE_CXX_COMPILER_INIT})
-  ELSE(CMAKE_CXX_COMPILER_INIT)
-    SET(CMAKE_CXX_COMPILER_LIST ${_CMAKE_TOOLCHAIN_PREFIX}c++ ${_CMAKE_TOOLCHAIN_PREFIX}g++ CC aCC cl bcc xlC)
-  ENDIF(CMAKE_CXX_COMPILER_INIT)
+    # prefer the environment variable CXX
+    if(NOT $ENV{CXX} STREQUAL "")
+      get_filename_component(CMAKE_CXX_COMPILER_INIT $ENV{CXX} PROGRAM PROGRAM_ARGS CMAKE_CXX_FLAGS_ENV_INIT)
+      if(CMAKE_CXX_FLAGS_ENV_INIT)
+        set(CMAKE_CXX_COMPILER_ARG1 "${CMAKE_CXX_FLAGS_ENV_INIT}" CACHE STRING "Arguments to CXX compiler")
+      endif()
+      if(NOT EXISTS ${CMAKE_CXX_COMPILER_INIT})
+        message(FATAL_ERROR "Could not find compiler set in environment variable CXX:\n$ENV{CXX}.\n${CMAKE_CXX_COMPILER_INIT}")
+      endif()
+    endif()
 
-  # Find the compiler.
-  IF (_CMAKE_USER_C_COMPILER_PATH)
-    FIND_PROGRAM(CMAKE_CXX_COMPILER NAMES ${CMAKE_CXX_COMPILER_LIST} PATHS ${_CMAKE_USER_C_COMPILER_PATH} DOC "C++ compiler" NO_DEFAULT_PATH)
-  ENDIF (_CMAKE_USER_C_COMPILER_PATH)
-  FIND_PROGRAM(CMAKE_CXX_COMPILER NAMES ${CMAKE_CXX_COMPILER_LIST} DOC "C++ compiler")
-  
-  IF(CMAKE_CXX_COMPILER_INIT AND NOT CMAKE_CXX_COMPILER)
-    SET(CMAKE_CXX_COMPILER "${CMAKE_CXX_COMPILER_INIT}" CACHE FILEPATH "C++ compiler" FORCE)
-  ENDIF(CMAKE_CXX_COMPILER_INIT AND NOT CMAKE_CXX_COMPILER)
-ELSE(NOT CMAKE_CXX_COMPILER)
+    # next prefer the generator specified compiler
+    if(CMAKE_GENERATOR_CXX)
+      if(NOT CMAKE_CXX_COMPILER_INIT)
+        set(CMAKE_CXX_COMPILER_INIT ${CMAKE_GENERATOR_CXX})
+      endif()
+    endif()
 
-# we only get here if CMAKE_CXX_COMPILER was specified using -D or a pre-made CMakeCache.txt
-# (e.g. via ctest) or set in CMAKE_TOOLCHAIN_FILE
-#
-# if CMAKE_CXX_COMPILER is a list of length 2, use the first item as 
-# CMAKE_CXX_COMPILER and the 2nd one as CMAKE_CXX_COMPILER_ARG1
+    # finally list compilers to try
+    if(NOT CMAKE_CXX_COMPILER_INIT)
+      set(CMAKE_CXX_COMPILER_LIST CC ${_CMAKE_TOOLCHAIN_PREFIX}c++ ${_CMAKE_TOOLCHAIN_PREFIX}g++ aCC cl bcc xlC icpx icx clang++)
+    endif()
 
-  LIST(LENGTH CMAKE_CXX_COMPILER _CMAKE_CXX_COMPILER_LIST_LENGTH)
-  IF("${_CMAKE_CXX_COMPILER_LIST_LENGTH}" EQUAL 2)
-    LIST(GET CMAKE_CXX_COMPILER 1 CMAKE_CXX_COMPILER_ARG1)
-    LIST(GET CMAKE_CXX_COMPILER 0 CMAKE_CXX_COMPILER)
-  ENDIF("${_CMAKE_CXX_COMPILER_LIST_LENGTH}" EQUAL 2)
+    _cmake_find_compiler(CXX)
+  else()
+    _cmake_find_compiler_path(CXX)
+  endif()
+  mark_as_advanced(CMAKE_CXX_COMPILER)
 
-# if a compiler was specified by the user but without path, 
-# now try to find it with the full path
-# if it is found, force it into the cache, 
-# if not, don't overwrite the setting (which was given by the user) with "NOTFOUND"
-# if the CXX compiler already had a path, reuse it for searching the C compiler
-  GET_FILENAME_COMPONENT(_CMAKE_USER_CXX_COMPILER_PATH "${CMAKE_CXX_COMPILER}" PATH)
-  IF(NOT _CMAKE_USER_CXX_COMPILER_PATH)
-    FIND_PROGRAM(CMAKE_CXX_COMPILER_WITH_PATH NAMES ${CMAKE_CXX_COMPILER})
-    MARK_AS_ADVANCED(CMAKE_CXX_COMPILER_WITH_PATH)
-    IF(CMAKE_CXX_COMPILER_WITH_PATH)
-      SET(CMAKE_CXX_COMPILER ${CMAKE_CXX_COMPILER_WITH_PATH} CACHE STRING "CXX compiler" FORCE)
-    ENDIF(CMAKE_CXX_COMPILER_WITH_PATH)
-  ENDIF(NOT _CMAKE_USER_CXX_COMPILER_PATH)
-ENDIF(NOT CMAKE_CXX_COMPILER)
-MARK_AS_ADVANCED(CMAKE_CXX_COMPILER)
+  # Each entry in this list is a set of extra flags to try
+  # adding to the compile line to see if it helps produce
+  # a valid identification file.
+  set(CMAKE_CXX_COMPILER_ID_TEST_FLAGS_FIRST)
+  set(CMAKE_CXX_COMPILER_ID_TEST_FLAGS
+    # Try compiling to an object file only.
+    "-c"
+    # IAR does not detect language automatically
+    "--c++"
+    "--ec++"
 
-IF (NOT _CMAKE_TOOLCHAIN_LOCATION)
-  GET_FILENAME_COMPONENT(_CMAKE_TOOLCHAIN_LOCATION "${CMAKE_CXX_COMPILER}" PATH)
-ENDIF (NOT _CMAKE_TOOLCHAIN_LOCATION)
+    # ARMClang need target options
+    "--target=arm-arm-none-eabi -mcpu=cortex-m3"
 
-# if we have a g++ cross compiler, they have usually some prefix, like 
-# e.g. powerpc-linux-g++, arm-elf-g++ or i586-mingw32msvc-g++
-# the other tools of the toolchain usually have the same prefix
-IF (NOT _CMAKE_TOOLCHAIN_PREFIX)
-  GET_FILENAME_COMPONENT(COMPILER_BASENAME "${CMAKE_CXX_COMPILER}" NAME_WE)
-  IF (COMPILER_BASENAME MATCHES "^(.+-)[gc]\\+\\+")
-    STRING(REGEX REPLACE "^(.+-)[gc]\\+\\+"  "\\1" _CMAKE_TOOLCHAIN_PREFIX "${COMPILER_BASENAME}")
-  ENDIF (COMPILER_BASENAME MATCHES "^(.+-)[gc]\\+\\+")
-ENDIF (NOT _CMAKE_TOOLCHAIN_PREFIX)
+    # MSVC needs at least one include directory for __has_include to function,
+    # but custom toolchains may run MSVC with no INCLUDE env var and no -I flags.
+    # Also avoid linking so this works with no LIB env var.
+    "-c -I__does_not_exist__"
+    )
+endif()
 
-# This block was used before the compiler was identified by building a
-# source file.  Unless g++ crashes when building a small C++
-# executable this should no longer be needed.
-#
-# The g++ that comes with BeOS 5 segfaults if you run "g++ -E"
-#  ("gcc -E" is fine), which throws up a system dialog box that hangs cmake
-#  until the user clicks "OK"...so for now, we just assume it's g++.
-# IF(BEOS)
-#   SET(CMAKE_COMPILER_IS_GNUCXX 1)
-#   SET(CMAKE_COMPILER_IS_GNUCXX_RUN 1)
-# ENDIF(BEOS)
+if(CMAKE_CXX_COMPILER_TARGET)
+  set(CMAKE_CXX_COMPILER_ID_TEST_FLAGS_FIRST "-c --target=${CMAKE_CXX_COMPILER_TARGET}")
+endif()
 
 # Build a small source file to identify the compiler.
-IF(${CMAKE_GENERATOR} MATCHES "Visual Studio")
-  SET(CMAKE_CXX_COMPILER_ID_RUN 1)
-  SET(CMAKE_CXX_PLATFORM_ID "Windows")
-
-  # TODO: Set the compiler id.  It is probably MSVC but
-  # the user may be using an integrated Intel compiler.
-  # SET(CMAKE_CXX_COMPILER_ID "MSVC")
-ENDIF(${CMAKE_GENERATOR} MATCHES "Visual Studio")
-IF(NOT CMAKE_CXX_COMPILER_ID_RUN)
-  SET(CMAKE_CXX_COMPILER_ID_RUN 1)
+if(NOT CMAKE_CXX_COMPILER_ID_RUN)
+  set(CMAKE_CXX_COMPILER_ID_RUN 1)
 
   # Try to identify the compiler.
-  SET(CMAKE_CXX_COMPILER_ID)
-  INCLUDE(${CMAKE_ROOT}/Modules/CMakeDetermineCompilerId.cmake)
-  CMAKE_DETERMINE_COMPILER_ID(CXX CXXFLAGS ${CMAKE_ROOT}/Modules/CMakeCXXCompilerId.cpp)
+  set(CMAKE_CXX_COMPILER_ID)
+  set(CMAKE_CXX_PLATFORM_ID)
+  file(READ ${CMAKE_ROOT}/Modules/CMakePlatformId.h.in
+    CMAKE_CXX_COMPILER_ID_PLATFORM_CONTENT)
+
+  # The IAR compiler produces weird output.
+  # See https://gitlab.kitware.com/cmake/cmake/-/issues/10176#note_153591
+  list(APPEND CMAKE_CXX_COMPILER_ID_VENDORS IAR)
+  set(CMAKE_CXX_COMPILER_ID_VENDOR_FLAGS_IAR )
+  set(CMAKE_CXX_COMPILER_ID_VENDOR_REGEX_IAR "IAR .+ Compiler")
+
+  # Match the link line from xcodebuild output of the form
+  #  Ld ...
+  #      ...
+  #      /path/to/cc ...CompilerIdCXX/...
+  # to extract the compiler front-end for the language.
+  set(CMAKE_CXX_COMPILER_ID_TOOL_MATCH_REGEX "\nLd[^\n]*(\n[ \t]+[^\n]*)*\n[ \t]+([^ \t\r\n]+)[^\r\n]*-o[^\r\n]*CompilerIdCXX/(\\./)?(CompilerIdCXX.(framework|xctest|build/[^ \t\r\n]+)/)?CompilerIdCXX[ \t\n\\\"]")
+  set(CMAKE_CXX_COMPILER_ID_TOOL_MATCH_INDEX 2)
+
+  include(${CMAKE_ROOT}/Modules/CMakeDetermineCompilerId.cmake)
+  CMAKE_DETERMINE_COMPILER_ID(CXX CXXFLAGS CMakeCXXCompilerId.cpp)
+
+  _cmake_find_compiler_sysroot(CXX)
 
   # Set old compiler and platform id variables.
-  IF("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-    SET(CMAKE_COMPILER_IS_GNUCXX 1)
-  ENDIF("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-  IF("${CMAKE_CXX_PLATFORM_ID}" MATCHES "MinGW")
-    SET(CMAKE_COMPILER_IS_MINGW 1)
-  ELSEIF("${CMAKE_CXX_PLATFORM_ID}" MATCHES "Cygwin")
-    SET(CMAKE_COMPILER_IS_CYGWIN 1)
-  ENDIF("${CMAKE_CXX_PLATFORM_ID}" MATCHES "MinGW")
-ENDIF(NOT CMAKE_CXX_COMPILER_ID_RUN)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(CMAKE_COMPILER_IS_GNUCXX 1)
+  endif()
+else()
+  if(NOT DEFINED CMAKE_CXX_COMPILER_FRONTEND_VARIANT)
+    # Some toolchain files set our internal CMAKE_CXX_COMPILER_ID_RUN
+    # variable but are not aware of CMAKE_CXX_COMPILER_FRONTEND_VARIANT.
+    # They pre-date our support for the GNU-like variant targeting the
+    # MSVC ABI so we do not consider that here.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+      OR "x${CMAKE_CXX_COMPILER_ID}" STREQUAL "xIntelLLVM")
+      if("x${CMAKE_CXX_SIMULATE_ID}" STREQUAL "xMSVC")
+        set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT "MSVC")
+      else()
+        set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT "GNU")
+      endif()
+    else()
+      set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT "")
+    endif()
+  endif()
+endif()
 
-INCLUDE(CMakeFindBinUtils)
+if (NOT _CMAKE_TOOLCHAIN_LOCATION)
+  get_filename_component(_CMAKE_TOOLCHAIN_LOCATION "${CMAKE_CXX_COMPILER}" PATH)
+endif ()
+
+# if we have a g++ cross compiler, they have usually some prefix, like
+# e.g. powerpc-linux-g++, arm-elf-g++ or i586-mingw32msvc-g++ , optionally
+# with a 3-component version number at the end (e.g. arm-eabi-gcc-4.5.2).
+# The other tools of the toolchain usually have the same prefix
+# NAME_WE cannot be used since then this test will fail for names like
+# "arm-unknown-nto-qnx6.3.0-gcc.exe", where BASENAME would be
+# "arm-unknown-nto-qnx6" instead of the correct "arm-unknown-nto-qnx6.3.0-"
+
+
+if (NOT _CMAKE_TOOLCHAIN_PREFIX)
+
+  if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU|Clang|QCC|LCC")
+    get_filename_component(COMPILER_BASENAME "${CMAKE_CXX_COMPILER}" NAME)
+    if (COMPILER_BASENAME MATCHES "^(.+-)?(clang\\+\\+|[gc]\\+\\+|clang-cl)(-[0-9]+(\\.[0-9]+)*)?(-[^.]+)?(\\.exe)?$")
+      set(_CMAKE_TOOLCHAIN_PREFIX ${CMAKE_MATCH_1})
+      set(_CMAKE_TOOLCHAIN_SUFFIX ${CMAKE_MATCH_3})
+      set(_CMAKE_COMPILER_SUFFIX ${CMAKE_MATCH_5})
+    elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+      if(CMAKE_CXX_COMPILER_TARGET)
+        set(_CMAKE_TOOLCHAIN_PREFIX ${CMAKE_CXX_COMPILER_TARGET}-)
+      endif()
+    elseif(COMPILER_BASENAME MATCHES "QCC(\\.exe)?$")
+      if(CMAKE_CXX_COMPILER_TARGET MATCHES "gcc_nto([a-z0-9]+_[0-9]+|[^_le]+)(le)")
+        set(_CMAKE_TOOLCHAIN_PREFIX nto${CMAKE_MATCH_1}-)
+      endif()
+    endif ()
+
+    # if "llvm-" is part of the prefix, remove it, since llvm doesn't have its own binutils
+    # but uses the regular ar, objcopy, etc. (instead of llvm-objcopy etc.)
+    if ("${_CMAKE_TOOLCHAIN_PREFIX}" MATCHES "(.+-)?llvm-$")
+      set(_CMAKE_TOOLCHAIN_PREFIX ${CMAKE_MATCH_1})
+    endif ()
+  elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "TI")
+    # TI compilers are named e.g. cl6x, cl470 or armcl.exe
+    get_filename_component(COMPILER_BASENAME "${CMAKE_CXX_COMPILER}" NAME)
+    if (COMPILER_BASENAME MATCHES "^(.+)?cl([^.]+)?(\\.exe)?$")
+      set(_CMAKE_TOOLCHAIN_PREFIX "${CMAKE_MATCH_1}")
+      set(_CMAKE_TOOLCHAIN_SUFFIX "${CMAKE_MATCH_2}")
+    endif ()
+
+  endif()
+
+endif ()
+
+set(_CMAKE_PROCESSING_LANGUAGE "CXX")
+include(CMakeFindBinUtils)
+include(Compiler/${CMAKE_CXX_COMPILER_ID}-FindBinUtils OPTIONAL)
+unset(_CMAKE_PROCESSING_LANGUAGE)
+
+if(CMAKE_CXX_COMPILER_SYSROOT)
+  string(CONCAT _SET_CMAKE_CXX_COMPILER_SYSROOT
+    "set(CMAKE_CXX_COMPILER_SYSROOT \"${CMAKE_CXX_COMPILER_SYSROOT}\")\n"
+    "set(CMAKE_COMPILER_SYSROOT \"${CMAKE_CXX_COMPILER_SYSROOT}\")")
+else()
+  set(_SET_CMAKE_CXX_COMPILER_SYSROOT "")
+endif()
+
+if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID)
+  set(_SET_CMAKE_CXX_COMPILER_ARCHITECTURE_ID
+    "set(CMAKE_CXX_COMPILER_ARCHITECTURE_ID ${CMAKE_CXX_COMPILER_ARCHITECTURE_ID})")
+else()
+  set(_SET_CMAKE_CXX_COMPILER_ARCHITECTURE_ID "")
+endif()
+
+if(MSVC_CXX_ARCHITECTURE_ID)
+  set(SET_MSVC_CXX_ARCHITECTURE_ID
+    "set(MSVC_CXX_ARCHITECTURE_ID ${MSVC_CXX_ARCHITECTURE_ID})")
+endif()
+
+if(CMAKE_CXX_XCODE_ARCHS)
+  set(SET_CMAKE_XCODE_ARCHS
+    "set(CMAKE_XCODE_ARCHS \"${CMAKE_CXX_XCODE_ARCHS}\")")
+endif()
 
 # configure all variables set in this file
-CONFIGURE_FILE(${CMAKE_ROOT}/Modules/CMakeCXXCompiler.cmake.in 
-               ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeCXXCompiler.cmake IMMEDIATE)
+configure_file(${CMAKE_ROOT}/Modules/CMakeCXXCompiler.cmake.in
+  ${CMAKE_PLATFORM_INFO_DIR}/CMakeCXXCompiler.cmake
+  @ONLY
+  )
 
-SET(CMAKE_CXX_COMPILER_ENV_VAR "CXX")
+set(CMAKE_CXX_COMPILER_ENV_VAR "CXX")

@@ -1,24 +1,15 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmFindLibraryCommand_h
-#define cmFindLibraryCommand_h
+#include <string>
+#include <vector>
 
 #include "cmFindBase.h"
 
+class cmExecutionStatus;
 
 /** \class cmFindLibraryCommand
  * \brief Define a command to search for a library.
@@ -30,45 +21,25 @@
 class cmFindLibraryCommand : public cmFindBase
 {
 public:
-  cmFindLibraryCommand();
-  /**
-   * This is a virtual constructor for the command.
-   */
-  virtual cmCommand* Clone() 
-    {
-    return new cmFindLibraryCommand;
-    }
+  cmFindLibraryCommand(cmExecutionStatus& status);
 
-  /**
-   * This is called when the command is first encountered in
-   * the CMakeLists.txt file.
-   */
-  virtual bool InitialPass(std::vector<std::string> const& args);
+  bool InitialPass(std::vector<std::string> const& args);
 
-  /**
-   * This determines if the command is invoked when in script mode.
-   */
-  virtual bool IsScriptable() { return true; }
-
-  /**
-   * The name of the command as specified in CMakeList.txt.
-   */
-  virtual const char* GetName() {return "find_library";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation() 
-    {
-    return "Find a library.";
-    }
-  cmTypeMacro(cmFindLibraryCommand, cmFindBase);
-  
 protected:
-  void AddLib64Paths();\
-  std::string FindLibrary(const char* name);
+  void AddArchitecturePaths(const char* suffix);
+  void AddArchitecturePath(std::string const& dir,
+                           std::string::size_type start_pos,
+                           const char* suffix, bool fresh = true);
+  std::string FindLibrary();
+
+private:
+  std::string FindNormalLibrary();
+  std::string FindNormalLibraryNamesPerDir();
+  std::string FindNormalLibraryDirsPerName();
+  std::string FindFrameworkLibrary();
+  std::string FindFrameworkLibraryNamesPerDir();
+  std::string FindFrameworkLibraryDirsPerName();
 };
 
-
-
-#endif
+bool cmFindLibrary(std::vector<std::string> const& args,
+                   cmExecutionStatus& status);

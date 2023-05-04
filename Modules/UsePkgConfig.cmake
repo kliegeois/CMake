@@ -1,57 +1,75 @@
-# - obsolete pkg-config module for CMake
-#
-# Defines the following macros:
-#
-# PKGCONFIG(package includedir libdir linkflags cflags)
-#
-# Calling PKGCONFIG will fill the desired information into the 4 given arguments,
-# e.g. PKGCONFIG(libart-2.0 LIBART_INCLUDE_DIR LIBART_LINK_DIR LIBART_LINK_FLAGS LIBART_CFLAGS)
-# if pkg-config was NOT found or the specified software package doesn't exist, the
-# variable will be empty when the function returns, otherwise they will contain the respective information
-#
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
+
+#[=======================================================================[.rst:
+UsePkgConfig
+------------
+
+Obsolete pkg-config module for CMake, use FindPkgConfig instead.
 
 
 
-FIND_PROGRAM(PKGCONFIG_EXECUTABLE NAMES pkg-config PATHS /usr/local/bin )
+This module defines the following macro:
 
-MACRO(PKGCONFIG _package _include_DIR _link_DIR _link_FLAGS _cflags)
+PKGCONFIG(package includedir libdir linkflags cflags)
+
+Calling PKGCONFIG will fill the desired information into the 4 given
+arguments, e.g.  PKGCONFIG(libart-2.0 LIBART_INCLUDE_DIR
+LIBART_LINK_DIR LIBART_LINK_FLAGS LIBART_CFLAGS) if pkg-config was NOT
+found or the specified software package doesn't exist, the variable
+will be empty when the function returns, otherwise they will contain
+the respective information
+#]=======================================================================]
+
+find_program(PKGCONFIG_EXECUTABLE NAMES pkg-config )
+
+macro(PKGCONFIG _package _include_DIR _link_DIR _link_FLAGS _cflags)
   message(STATUS
-    "WARNING: you are using the obsolete 'PKGCONFIG' macro use FindPkgConfig")
+    "WARNING: you are using the obsolete 'PKGCONFIG' macro, use FindPkgConfig")
 # reset the variables at the beginning
-  SET(${_include_DIR})
-  SET(${_link_DIR})
-  SET(${_link_FLAGS})
-  SET(${_cflags})
+  set(${_include_DIR})
+  set(${_link_DIR})
+  set(${_link_FLAGS})
+  set(${_cflags})
 
   # if pkg-config has been found
-  IF(PKGCONFIG_EXECUTABLE)
+  if(PKGCONFIG_EXECUTABLE)
 
-    EXEC_PROGRAM(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --exists RETURN_VALUE _return_VALUE OUTPUT_VARIABLE _pkgconfigDevNull )
+    exec_program(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --exists RETURN_VALUE _return_VALUE OUTPUT_VARIABLE _pkgconfigDevNull )
 
     # and if the package of interest also exists for pkg-config, then get the information
-    IF(NOT _return_VALUE)
+    if(NOT _return_VALUE)
 
-      EXEC_PROGRAM(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --variable=includedir 
+      exec_program(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --variable=includedir
         OUTPUT_VARIABLE ${_include_DIR} )
       string(REGEX REPLACE "[\r\n]" " " ${_include_DIR} "${${_include_DIR}}")
-    
 
-      EXEC_PROGRAM(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --variable=libdir 
+
+      exec_program(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --variable=libdir
         OUTPUT_VARIABLE ${_link_DIR} )
       string(REGEX REPLACE "[\r\n]" " " ${_link_DIR} "${${_link_DIR}}")
 
-      EXEC_PROGRAM(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --libs 
+      exec_program(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --libs
         OUTPUT_VARIABLE ${_link_FLAGS} )
       string(REGEX REPLACE "[\r\n]" " " ${_link_FLAGS} "${${_link_FLAGS}}")
 
-      EXEC_PROGRAM(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --cflags 
+      exec_program(${PKGCONFIG_EXECUTABLE} ARGS ${_package} --cflags
         OUTPUT_VARIABLE ${_cflags} )
       string(REGEX REPLACE "[\r\n]" " " ${_cflags} "${${_cflags}}")
 
-    ENDIF(NOT _return_VALUE)
+    else()
 
-  ENDIF(PKGCONFIG_EXECUTABLE)
+      message(STATUS "PKGCONFIG() indicates that ${_package} is not installed (install the package which contains ${_package}.pc if you want to support this feature)")
 
-ENDMACRO(PKGCONFIG _include_DIR _link_DIR _link_FLAGS _cflags)
+    endif()
 
-MARK_AS_ADVANCED(PKGCONFIG_EXECUTABLE)
+  # if pkg-config has NOT been found, INFORM the user
+  else()
+
+    message(STATUS "WARNING: PKGCONFIG() indicates that the tool pkg-config has not been found on your system. You should install it.")
+
+  endif()
+
+endmacro()
+
+mark_as_advanced(PKGCONFIG_EXECUTABLE)

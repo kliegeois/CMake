@@ -1,143 +1,155 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmVariableWatchCommand.h"
 
+#include <limits>
+#include <memory>
+#include <utility>
+
+#include "cmExecutionStatus.h"
+#include "cmListFileCache.h"
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
+#include "cmValue.h"
 #include "cmVariableWatch.h"
+#include "cmake.h"
 
-//----------------------------------------------------------------------------
-static void cmVariableWatchCommandVariableAccessed(
-  const std::string& variable, int access_type, void* client_data,
-  const char* newValue, const cmMakefile* mf)
+class cmLocalGenerator;
+
+namespace {
+struct cmVariableWatchCallbackData
 {
-  cmVariableWatchCommand* command
-    = static_cast<cmVariableWatchCommand*>(client_data);
-  command->VariableAccessed(variable, access_type, newValue, mf);
-}
+  bool InCallback;
+  std::string Command;
+};
 
-//----------------------------------------------------------------------------
-cmVariableWatchCommand::cmVariableWatchCommand()
+void cmVariableWatchCommandVariableAccessed(const std::string& variable,
+                                            int access_type, void* client_data,
+                                            const char* newValue,
+                                            const cmMakefile* mf)
 {
-  this->InCallback = false;
-}
+  cmVariableWatchCallbackData* data =
+    static_cast<cmVariableWatchCallbackData*>(client_data);
 
-//----------------------------------------------------------------------------
-bool cmVariableWatchCommand::InitialPass(std::vector<std::string> const& args)
-{
-  if ( args.size() < 1 )
-    {
-    this->SetError("must be called with at least one argument.");
-    return false;
-    }
-  std::string variable = args[0];
-  if ( args.size() > 1 )
-    {
-    std::string command = args[1];
-    this->Handlers[variable].Commands.push_back(args[1]);
-    }
-  if ( variable == "CMAKE_CURRENT_LIST_FILE" )
-    {
-    cmOStringStream ostr;
-    ostr << "cannot be set on the variable: " << variable.c_str();
-    this->SetError(ostr.str().c_str());
-    return false;
-    }
-
-  this->Makefile->GetCMakeInstance()->GetVariableWatch()->AddWatch(
-    variable, cmVariableWatchCommandVariableAccessed, this);
-
-  return true;
-}
-
-//----------------------------------------------------------------------------
-void cmVariableWatchCommand::VariableAccessed(const std::string& variable,
-  int access_type, const char* newValue, const cmMakefile* mf)
-{
-  if ( this->InCallback )
-    {
+  if (data->InCallback) {
     return;
-    }
-  this->InCallback = true;
+  }
+  data->InCallback = true;
 
-  cmListFileFunction newLFF;
-  cmVariableWatchCommandHandler *handler = &this->Handlers[variable];
-  cmVariableWatchCommandHandler::VectorOfCommands::iterator it;
-  cmListFileArgument arg;
-  bool processed = false;
-  const char* accessString = cmVariableWatch::GetAccessAsString(access_type);
-  const char* currentListFile = mf->GetDefinition("CMAKE_CURRENT_LIST_FILE");
+  auto accessString = cmVariableWatch::GetAccessAsString(access_type);
 
   /// Ultra bad!!
   cmMakefile* makefile = const_cast<cmMakefile*>(mf);
 
-  std::string stack = makefile->GetProperty("LISTFILE_STACK");
-  for ( it = handler->Commands.begin(); it != handler->Commands.end();
-    ++ it )
-    {
-    std::string command = *it;
-    newLFF.Arguments.clear();
-    newLFF.Arguments.push_back(
-      cmListFileArgument(variable, true, "unknown", 9999));
-    newLFF.Arguments.push_back(
-      cmListFileArgument(accessString, true, "unknown", 9999));
-    newLFF.Arguments.push_back(
-      cmListFileArgument(newValue?newValue:"", true, "unknown", 9999));
-    newLFF.Arguments.push_back(
-      cmListFileArgument(currentListFile, true, "unknown", 9999));
-    newLFF.Arguments.push_back(
-      cmListFileArgument(stack, true, "unknown", 9999));
-    newLFF.Name = command; 
-    newLFF.FilePath = "Some weird path";
-    newLFF.Line = 9999;
-    if(!makefile->ExecuteCommand(newLFF))
-      {
-      arg.FilePath =  "Unknown";
-      arg.Line = 0;
-      cmOStringStream error;
-      error << "Error in cmake code at\n"
-        << arg.FilePath << ":" << arg.Line << ":\n"
-        << "A command failed during the invocation of callback\""
-        << command << "\".";
-      cmSystemTools::Error(error.str().c_str());
-      this->InCallback = false;
-      return;
-      }
-    processed = true;
+  std::string stack = *mf->GetProperty("LISTFILE_STACK");
+  if (!data->Command.empty()) {
+    cmValue const currentListFile =
+      mf->GetDefinition("CMAKE_CURRENT_LIST_FILE");
+    const auto fakeLineNo =
+      std::numeric_limits<decltype(cmListFileArgument::Line)>::max();
+
+    std::vector<cmListFileArgument> newLFFArgs{
+      { variable, cmListFileArgument::Quoted, fakeLineNo },
+      { accessString, cmListFileArgument::Quoted, fakeLineNo },
+      { newValue ? newValue : "", cmListFileArgument::Quoted, fakeLineNo },
+      { *currentListFile, cmListFileArgument::Quoted, fakeLineNo },
+      { stack, cmListFileArgument::Quoted, fakeLineNo }
+    };
+
+    cmListFileFunction newLFF{ data->Command, fakeLineNo,
+                               std::move(newLFFArgs) };
+    cmExecutionStatus status(*makefile);
+    if (!makefile->ExecuteCommand(newLFF, status)) {
+      cmSystemTools::Error(
+        cmStrCat("Error in cmake code at\nUnknown:0:\nA command failed "
+                 "during the invocation of callback \"",
+                 data->Command, "\"."));
     }
-  if ( !processed )
+  } else {
+    makefile->IssueMessage(
+      MessageType::LOG,
+      cmStrCat("Variable \"", variable, "\" was accessed using ", accessString,
+               " with value \"", (newValue ? newValue : ""), "\"."));
+  }
+
+  data->InCallback = false;
+}
+
+void deleteVariableWatchCallbackData(void* client_data)
+{
+  cmVariableWatchCallbackData* data =
+    static_cast<cmVariableWatchCallbackData*>(client_data);
+  delete data;
+}
+
+/** This command does not really have a final pass but it needs to
+    stay alive since it owns variable watch callback information. */
+class FinalAction
+{
+public:
+  /* NOLINTNEXTLINE(performance-unnecessary-value-param) */
+  FinalAction(cmMakefile* makefile, std::string variable)
+    : Action{ std::make_shared<Impl>(makefile, std::move(variable)) }
+  {
+  }
+
+  void operator()(cmLocalGenerator&, const cmListFileBacktrace&) const {}
+
+private:
+  struct Impl
+  {
+    Impl(cmMakefile* makefile, std::string variable)
+      : Makefile{ makefile }
+      , Variable{ std::move(variable) }
     {
-    cmOStringStream msg;
-    msg << "* Variable \"" << variable.c_str() << "\" was accessed using "
-      << accessString << " in: " << currentListFile << std::endl;
-    msg << "  The value of the variable: \"" << newValue << "\"" << std::endl;
-    msg << "  The list file stack: " << stack.c_str();
-    cmSystemTools::Message(msg.str().c_str());
-    std::vector<std::string> vars = makefile->GetDefinitions();
-    cmOStringStream msg2;
-    size_t cc;
-    for ( cc = 0; cc < vars.size(); cc ++ )
-      {
-      if ( vars[cc] == variable )
-        {
-        continue;
-        }
-      msg2 << vars[cc] << " = \""
-        << makefile->GetDefinition(vars[cc].c_str()) << "\"" << std::endl;
-      }
-    //cmSystemTools::Message(msg2.str().c_str());
     }
-  this->InCallback = false;
+
+    ~Impl()
+    {
+      this->Makefile->GetCMakeInstance()->GetVariableWatch()->RemoveWatch(
+        this->Variable, cmVariableWatchCommandVariableAccessed);
+    }
+
+    cmMakefile* const Makefile;
+    std::string const Variable;
+  };
+
+  std::shared_ptr<Impl const> Action;
+};
+} // anonymous namespace
+
+bool cmVariableWatchCommand(std::vector<std::string> const& args,
+                            cmExecutionStatus& status)
+{
+  if (args.empty()) {
+    status.SetError("must be called with at least one argument.");
+    return false;
+  }
+  std::string const& variable = args[0];
+  std::string command;
+  if (args.size() > 1) {
+    command = args[1];
+  }
+  if (variable == "CMAKE_CURRENT_LIST_FILE") {
+    status.SetError(cmStrCat("cannot be set on the variable: ", variable));
+    return false;
+  }
+
+  auto* const data = new cmVariableWatchCallbackData;
+
+  data->InCallback = false;
+  data->Command = std::move(command);
+
+  if (!status.GetMakefile().GetCMakeInstance()->GetVariableWatch()->AddWatch(
+        variable, cmVariableWatchCommandVariableAccessed, data,
+        deleteVariableWatchCallbackData)) {
+    deleteVariableWatchCallbackData(data);
+    return false;
+  }
+
+  status.GetMakefile().AddGeneratorAction(
+    FinalAction{ &status.GetMakefile(), variable });
+  return true;
 }

@@ -1,37 +1,24 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmIncludeRegularExpressionCommand.h"
 
-// cmIncludeRegularExpressionCommand
-bool cmIncludeRegularExpressionCommand
-::InitialPass(std::vector<std::string> const& args)
+#include "cmExecutionStatus.h"
+#include "cmMakefile.h"
+
+bool cmIncludeRegularExpressionCommand(std::vector<std::string> const& args,
+                                       cmExecutionStatus& status)
 {
-  if((args.size() < 1) || (args.size() > 2))
-    {
-    this->SetError("called with incorrect number of arguments");
+  if (args.empty() || args.size() > 2) {
+    status.SetError("called with incorrect number of arguments");
     return false;
-    }
-  this->Makefile->SetIncludeRegularExpression(args[0].c_str());
-  
-  if(args.size() > 1)
-    {
-    this->Makefile->SetComplainRegularExpression(args[1].c_str());
-    }
-  
+  }
+
+  cmMakefile& mf = status.GetMakefile();
+  mf.SetIncludeRegularExpression(args[0]);
+
+  if (args.size() > 1) {
+    mf.SetComplainRegularExpression(args[1]);
+  }
+
   return true;
 }
-

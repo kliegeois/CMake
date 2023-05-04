@@ -1,90 +1,46 @@
-# This is part of the Findosg* suite used to find OpenSceneGraph components.
-# Each component is separate and you must opt in to each module. You must 
-# also opt into OpenGL and OpenThreads (and Producer if needed) as these 
-# modules won't do it for you. This is to allow you control over your own 
-# system piece by piece in case you need to opt out of certain components
-# or change the Find behavior for a particular module (perhaps because the
-# default FindOpenGL.cmake module doesn't work with your system as an
-# example).
-# If you want to use a more convenient module that includes everything,
-# use the FindOpenSceneGraph.cmake instead of the Findosg*.cmake modules.
-# 
-# Locate osgText
-# This module defines
-# OSGTEXT_LIBRARY
-# OSGTEXT_FOUND, if false, do not try to link to osgText
-# OSGTEXT_INCLUDE_DIR, where to find the headers
-#
-# $OSGDIR is an environment variable that would
-# correspond to the ./configure --prefix=$OSGDIR
-# used in building osg.
-#
-# Created by Eric Wing.
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
+
+#[=======================================================================[.rst:
+FindosgText
+-----------
+
+
+
+This is part of the Findosg* suite used to find OpenSceneGraph
+components.  Each component is separate and you must opt in to each
+module.  You must also opt into OpenGL and OpenThreads (and Producer
+if needed) as these modules won't do it for you.  This is to allow you
+control over your own system piece by piece in case you need to opt
+out of certain components or change the Find behavior for a particular
+module (perhaps because the default FindOpenGL.cmake module doesn't
+work with your system as an example).  If you want to use a more
+convenient module that includes everything, use the
+FindOpenSceneGraph.cmake instead of the Findosg*.cmake modules.
+
+Locate osgText This module defines
+
+OSGTEXT_FOUND - Was osgText found? OSGTEXT_INCLUDE_DIR - Where to find
+the headers OSGTEXT_LIBRARIES - The libraries to link for osgText (use
+this)
+
+OSGTEXT_LIBRARY - The osgText library OSGTEXT_LIBRARY_DEBUG - The
+osgText debug library
+
+$OSGDIR is an environment variable that would correspond to the
+./configure --prefix=$OSGDIR used in building osg.
+
+Created by Eric Wing.
+#]=======================================================================]
 
 # Header files are presumed to be included like
 # #include <osg/PositionAttitudeTransform>
 # #include <osgText/Text>
 
-# Try the user's environment request before anything else.
-FIND_PATH(OSGTEXT_INCLUDE_DIR osgText/Text
-  PATHS
-  $ENV{OSGTEXT_DIR}
-  $ENV{OSG_DIR}
-  $ENV{OSGDIR}
-  NO_DEFAULT_PATH
-  PATH_SUFFIXES include
-)
-FIND_PATH(OSGTEXT_INCLUDE_DIR osgText/Text
-  PATHS ${CMAKE_PREFIX_PATH} # Unofficial: We are proposing this.
-  NO_DEFAULT_PATH
-  PATH_SUFFIXES include
-)
-FIND_PATH(OSGTEXT_INCLUDE_DIR osgText/Text
-  PATHS
-    ~/Library/Frameworks
-    /Library/Frameworks
-    /usr/local
-    /usr
-    /sw # Fink
-    /opt/local # DarwinPorts
-    /opt/csw # Blastwave
-    /opt
-    [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session\ Manager\\Environment;OpenThreads_ROOT]
-    [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session\ Manager\\Environment;OSG_ROOT]
-  PATH_SUFFIXES include
-)
+include(${CMAKE_CURRENT_LIST_DIR}/Findosg_functions.cmake)
+OSG_FIND_PATH   (OSGTEXT osgText/Text)
+OSG_FIND_LIBRARY(OSGTEXT osgText)
 
-FIND_LIBRARY(OSGTEXT_LIBRARY 
-  NAMES osgText
-  PATHS
-  $ENV{OSGTEXT_DIR}
-  $ENV{OSG_DIR}
-  $ENV{OSGDIR}
-  NO_DEFAULT_PATH
-    PATH_SUFFIXES lib64 lib
-)
-FIND_LIBRARY(OSGTEXT_LIBRARY 
-  NAMES osgText
-  PATHS ${CMAKE_PREFIX_PATH} # Unofficial: We are proposing this.
-    NO_DEFAULT_PATH
-    PATH_SUFFIXES lib64 lib
-)
-FIND_LIBRARY(OSGTEXT_LIBRARY 
-  NAMES osgText
-  PATHS
-    ~/Library/Frameworks
-    /Library/Frameworks
-  /usr/local
-  /usr
-  /sw
-  /opt/local
-  /opt/csw
-  /opt
-    PATH_SUFFIXES lib64 lib
-)
-
-SET(OSGTEXT_FOUND "NO")
-IF(OSGTEXT_LIBRARY AND OSGTEXT_INCLUDE_DIR)
-  SET(OSGTEXT_FOUND "YES")
-ENDIF(OSGTEXT_LIBRARY AND OSGTEXT_INCLUDE_DIR)
-
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(osgText DEFAULT_MSG
+    OSGTEXT_LIBRARY OSGTEXT_INCLUDE_DIR)

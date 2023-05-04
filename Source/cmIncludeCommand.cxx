@@ -1,105 +1,186 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmIncludeCommand.h"
 
+#include <map>
+#include <sstream>
+#include <utility>
+
+#include "cmExecutionStatus.h"
+#include "cmGlobalGenerator.h"
+#include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmPolicies.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
 
 // cmIncludeCommand
-bool cmIncludeCommand::InitialPass(std::vector<std::string> const& args)
+bool cmIncludeCommand(std::vector<std::string> const& args,
+                      cmExecutionStatus& status)
 {
-  if (args.size()< 1 || args.size() > 4)
-    {
-      this->SetError("called with wrong number of arguments.  "
-                     "Include only takes one file.");
-      return false;
-    }
+  static std::map<std::string, cmPolicies::PolicyID> DeprecatedModules;
+  if (DeprecatedModules.empty()) {
+    DeprecatedModules["Documentation"] = cmPolicies::CMP0106;
+    DeprecatedModules["WriteCompilerDetectionHeader"] = cmPolicies::CMP0120;
+  }
+
+  if (args.empty() || args.size() > 4) {
+    status.SetError("called with wrong number of arguments.  "
+                    "include() only takes one file.");
+    return false;
+  }
   bool optional = false;
+  bool noPolicyScope = false;
   std::string fname = args[0];
   std::string resultVarName;
-  
-  for (unsigned int i=1; i<args.size(); i++)
-    {
-    if (args[i] == "OPTIONAL") 
-      {
-      if (optional)
-        {
-        this->SetError("called with invalid arguments: OPTIONAL used twice");
+
+  for (unsigned int i = 1; i < args.size(); i++) {
+    if (args[i] == "OPTIONAL") {
+      if (optional) {
+        status.SetError("called with invalid arguments: OPTIONAL used twice");
         return false;
-        }
+      }
       optional = true;
-      }
-    else if(args[i] == "RESULT_VARIABLE")
-      {
-      if (resultVarName.size() > 0)
-        {
-        this->SetError("called with invalid arguments: "
-            "only one result variable allowed");
+    } else if (args[i] == "RESULT_VARIABLE") {
+      if (!resultVarName.empty()) {
+        status.SetError("called with invalid arguments: "
+                        "only one result variable allowed");
         return false;
-        }
-      if(++i < args.size())
-        {
+      }
+      if (++i < args.size()) {
         resultVarName = args[i];
-        }
-      else
-        {
-        this->SetError("called with no value for RESULT_VARIABLE.");
+      } else {
+        status.SetError("called with no value for RESULT_VARIABLE.");
         return false;
-        }
       }
-      else if(i > 1)  // compat.: in previous cmake versions the second 
-                      // parameter was ignore if it wasn't "OPTIONAL"
-        {
-        std::string errorText = "called with invalid argument: ";  
-        errorText += args[i];
-        this->SetError(errorText.c_str());
-        return false;
-        }
-    }
-
-  if(!cmSystemTools::FileIsFullPath(fname.c_str()))
+    } else if (args[i] == "NO_POLICY_SCOPE") {
+      noPolicyScope = true;
+    } else if (i > 1) // compat.: in previous cmake versions the second
+                      // parameter was ignored if it wasn't "OPTIONAL"
     {
+      std::string errorText =
+        cmStrCat("called with invalid argument: ", args[i]);
+      status.SetError(errorText);
+      return false;
+    }
+  }
+
+  if (fname.empty()) {
+    status.GetMakefile().IssueMessage(
+      MessageType::AUTHOR_WARNING,
+      "include() given empty file name (ignored).");
+    return true;
+  }
+
+  if (!cmSystemTools::FileIsFullPath(fname)) {
+    bool system = false;
     // Not a path. Maybe module.
-    std::string module = fname;
-    module += ".cmake";
-    std::string mfile = this->Makefile->GetModulesFile(module.c_str());
-    if ( mfile.size() )
-      {
-      fname = mfile.c_str();
+    std::string module = cmStrCat(fname, ".cmake");
+    std::string mfile = status.GetMakefile().GetModulesFile(module, system);
+
+    if (system) {
+      auto ModulePolicy = DeprecatedModules.find(fname);
+      if (ModulePolicy != DeprecatedModules.end()) {
+        cmPolicies::PolicyStatus PolicyStatus =
+          status.GetMakefile().GetPolicyStatus(ModulePolicy->second);
+        switch (PolicyStatus) {
+          case cmPolicies::WARN: {
+            status.GetMakefile().IssueMessage(
+              MessageType::AUTHOR_WARNING,
+              cmStrCat(cmPolicies::GetPolicyWarning(ModulePolicy->second),
+                       "\n"));
+            CM_FALLTHROUGH;
+          }
+          case cmPolicies::OLD:
+            break;
+          case cmPolicies::REQUIRED_IF_USED:
+          case cmPolicies::REQUIRED_ALWAYS:
+          case cmPolicies::NEW:
+            mfile = "";
+            break;
+        }
       }
     }
-  std::string fullFilePath;
-  bool readit = 
-    this->Makefile->ReadListFile( this->Makefile->GetCurrentListFile(), 
-                                  fname.c_str(), &fullFilePath );
-  
-  // add the location of the included file if a result variable was given
-  if (resultVarName.size())
-    {
-      this->Makefile->AddDefinition(resultVarName.c_str(), 
-                                    readit?fullFilePath.c_str():"NOTFOUND");
-    }
 
-  if(!optional && !readit && !cmSystemTools::GetFatalErrorOccured())
-    {
-    std::string m = "Could not find include file: ";
-    m += fname;
-    this->SetError(m.c_str());
-    return false;
+    if (!mfile.empty()) {
+      fname = mfile;
     }
+  }
+
+  std::string fname_abs = cmSystemTools::CollapseFullPath(
+    fname, status.GetMakefile().GetCurrentSourceDirectory());
+
+  cmGlobalGenerator* gg = status.GetMakefile().GetGlobalGenerator();
+  if (gg->IsExportedTargetsFile(fname_abs)) {
+    const char* modal = nullptr;
+    std::ostringstream e;
+    MessageType messageType = MessageType::AUTHOR_WARNING;
+
+    switch (status.GetMakefile().GetPolicyStatus(cmPolicies::CMP0024)) {
+      case cmPolicies::WARN:
+        e << cmPolicies::GetPolicyWarning(cmPolicies::CMP0024) << "\n";
+        modal = "should";
+        CM_FALLTHROUGH;
+      case cmPolicies::OLD:
+        break;
+      case cmPolicies::REQUIRED_IF_USED:
+      case cmPolicies::REQUIRED_ALWAYS:
+      case cmPolicies::NEW:
+        modal = "may";
+        messageType = MessageType::FATAL_ERROR;
+    }
+    if (modal) {
+      e << "The file\n  " << fname_abs
+        << "\nwas generated by the export() "
+           "command.  It "
+        << modal
+        << " not be used as the argument to the "
+           "include() command.  Use ALIAS targets instead to refer to targets "
+           "by alternative names.\n";
+      status.GetMakefile().IssueMessage(messageType, e.str());
+      if (messageType == MessageType::FATAL_ERROR) {
+        return false;
+      }
+    }
+    gg->CreateGenerationObjects();
+    gg->GenerateImportFile(fname_abs);
+  }
+
+  std::string listFile = cmSystemTools::CollapseFullPath(
+    fname, status.GetMakefile().GetCurrentSourceDirectory());
+
+  const bool fileDoesnotExist = !cmSystemTools::FileExists(listFile);
+  const bool fileIsDirectory = cmSystemTools::FileIsDirectory(listFile);
+  if (fileDoesnotExist || fileIsDirectory) {
+    if (!resultVarName.empty()) {
+      status.GetMakefile().AddDefinition(resultVarName, "NOTFOUND");
+    }
+    if (optional) {
+      return true;
+    }
+    if (fileDoesnotExist) {
+      status.SetError(cmStrCat("could not find requested file:\n  ", fname));
+      return false;
+    }
+    if (fileIsDirectory) {
+      status.SetError(cmStrCat("requested file is a directory:\n  ", fname));
+      return false;
+    }
+  }
+
+  bool readit =
+    status.GetMakefile().ReadDependentFile(listFile, noPolicyScope);
+
+  // add the location of the included file if a result variable was given
+  if (!resultVarName.empty()) {
+    status.GetMakefile().AddDefinition(
+      resultVarName, readit ? fname_abs.c_str() : "NOTFOUND");
+  }
+
+  if (!optional && !readit && !cmSystemTools::GetFatalErrorOccured()) {
+    std::string m = cmStrCat("could not load requested file:\n  ", fname);
+    status.SetError(m);
+    return false;
+  }
   return true;
 }
-
-

@@ -1,10 +1,11 @@
-FIND_PROGRAM(CMAKE_MAKE_PROGRAM mingw32-make.exe PATHS
-  "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MinGW;InstallLocation]/bin" 
-  c:/MinGW/bin /MinGW/bin)
-FIND_PROGRAM(CMAKE_SH sh.exe )
-IF(CMAKE_SH)
-  MESSAGE(FATAL_ERROR "sh.exe was found in your PATH, here:\n${CMAKE_SH}\nFor MinGW make to work correctly sh.exe must NOT be in your path.\nRun cmake from a shell that does not have sh.exe in your PATH.\nIf you want to use a UNIX shell, then use MSYS Makefiles.\n")
-  SET(CMAKE_MAKE_PROGRAM NOTFOUND)
-ENDIF(CMAKE_SH)
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-MARK_AS_ADVANCED(CMAKE_MAKE_PROGRAM CMAKE_SH)
+
+find_program(CMAKE_MAKE_PROGRAM mingw32-make.exe PATHS
+  "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MinGW;InstallLocation]/bin"
+  c:/MinGW/bin /MinGW/bin
+  "[HKEY_CURRENT_USER\\Software\\CodeBlocks;Path]/MinGW/bin"
+  )
+
+mark_as_advanced(CMAKE_MAKE_PROGRAM)

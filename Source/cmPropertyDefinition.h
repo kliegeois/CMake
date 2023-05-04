@@ -1,64 +1,66 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmPropertyDefinition_h
-#define cmPropertyDefinition_h
+#include <map>
+#include <string>
+#include <utility>
 
 #include "cmProperty.h"
 
-class cmPropertyDefinition 
+/** \class cmPropertyDefinition
+ * \brief Property meta-information
+ *
+ * This class contains the following meta-information about property:
+ * - Various documentation strings;
+ * - If the property is chained.
+ */
+class cmPropertyDefinition
 {
 public:
-  // Define this property
-  void DefineProperty(const char *name, cmProperty::ScopeType scope,
-                      const char *ShortDescription,
-                      const char *FullDescription, 
-                      const char *DocumentationSection,
-                      bool chained);
+  /// Constructor
+  cmPropertyDefinition(std::string shortDescription,
+                       std::string fullDescription, bool chained);
 
-  // get the documentation string
-  cmDocumentationEntry GetDocumentation() const;
+  /// Is the property chained?
+  bool IsChained() const { return this->Chained; }
 
-  // basic constructor 
-  cmPropertyDefinition() { this->Chained = false; };
+  /// Get the documentation (short version)
+  const std::string& GetShortDescription() const
+  {
+    return this->ShortDescription;
+  }
 
-  // is it chained?
-  bool IsChained() {return this->Chained; };
+  /// Get the documentation (full version)
+  const std::string& GetFullDescription() const
+  {
+    return this->FullDescription;
+  }
 
-  // Get the section if any
-  const std::string &GetDocumentationSection() const {
-    return this->DocumentationSection; }; 
-  
-  // get the scope
-  cmProperty::ScopeType GetScope() const {
-    return this->Scope; };
-
-  // get the docs
-  const std::string &GetShortDescription() const {
-    return this->ShortDescription; }; 
-  const std::string &GetFullDescription() const {
-    return this->FullDescription; }; 
-  
-protected:
-  std::string Name;
+private:
   std::string ShortDescription;
   std::string FullDescription;
-  std::string DocumentationSection;
-  cmProperty::ScopeType Scope; 
   bool Chained;
 };
 
-#endif
+/** \class cmPropertyDefinitionMap
+ * \brief Map property name and scope to their definition
+ */
+class cmPropertyDefinitionMap
+{
+public:
+  // define the property
+  void DefineProperty(const std::string& name, cmProperty::ScopeType scope,
+                      const std::string& ShortDescription,
+                      const std::string& FullDescription, bool chain);
+
+  // get the property definition if present, otherwise nullptr
+  cmPropertyDefinition const* GetPropertyDefinition(
+    const std::string& name, cmProperty::ScopeType scope) const;
+
+private:
+  using key_type = std::pair<std::string, cmProperty::ScopeType>;
+  std::map<key_type, cmPropertyDefinition> Map_;
+};

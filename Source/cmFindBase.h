@@ -1,100 +1,104 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <utility>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
+#include "cmFindCommon.h"
+#include "cmStateTypes.h"
 
-=========================================================================*/
-#ifndef cmFindBase_h
-#define cmFindBase_h
-
-#include "cmCommand.h"
+class cmExecutionStatus;
 
 /** \class cmFindBase
- * \brief Define a command to search for an executable program.
+ * \brief Base class for most FIND_XXX commands.
  *
  * cmFindBase is a parent class for cmFindProgramCommand, cmFindPathCommand,
- * and cmFindLibraryCommand, cmFindFile
+ * and cmFindLibraryCommand, cmFindFileCommand
  */
-class cmFindBase : public cmCommand
+class cmFindBase : public cmFindCommon
 {
 public:
-  cmFindBase();
+  cmFindBase(std::string findCommandName, cmExecutionStatus& status);
+  virtual ~cmFindBase() = default;
+
   /**
    * This is called when the command is first encountered in
    * the CMakeLists.txt file.
    */
   virtual bool ParseArguments(std::vector<std::string> const& args);
-  cmTypeMacro(cmFindBase, cmCommand);
-  
-  virtual const char* GetFullDocumentation()
-    {return this->GenericDocumentation.c_str();}
 
-  enum RootPathMode { RootPathModeBoth, 
-                      RootPathModeOnlyRootPath, 
-                      RootPathModeNoRootPath };
-  
 protected:
-  void PrintFindStuff();
-  void ExpandPaths(std::vector<std::string> userPaths);
-  void HandleCMakeFindRootPath();
-  
-  // add to the SearchPaths
-  void AddPaths(std::vector<std::string>& paths);
-  void AddFrameWorkPaths();
-  void AddAppBundlePaths();
-  void AddEnvironmentVariables();
-  void AddFindPrefix(std::vector<std::string>& dest, 
-                     const std::vector<std::string>& src);
-  void AddCMakeVariables();
-  void AddSystemEnvironmentVariables();
-  void AddCMakeSystemVariables();
-  void ExpandRegistryAndCleanPath(std::vector<std::string>& paths);
-  // see if the VariableName is already set in the cache,
+  friend class cmFindBaseDebugState;
+  void ExpandPaths();
+
+  // see if the VariableName is already set,
   // also copy the documentation from the cache to VariableDocumentation
   // if it has documentation in the cache
-  bool CheckForVariableInCache();
-  
-  cmStdString GenericDocumentation;
+  bool CheckForVariableDefined();
+
+  void NormalizeFindResult();
+  void StoreFindResult(const std::string& value);
+
+  // actual find command name
+  std::string FindCommandName;
+
   // use by command during find
-  cmStdString VariableDocumentation;
-  cmStdString VariableName;
+  std::string VariableDocumentation;
+  cmStateEnums::CacheEntryType VariableType = cmStateEnums::UNINITIALIZED;
+  std::string VariableName;
   std::vector<std::string> Names;
-  std::vector<std::string> SearchPaths;
-  std::vector<std::string> SearchPathSuffixes;
+  bool NamesPerDir = false;
+  bool NamesPerDirAllowed = false;
 
   // CMAKE_*_PATH CMAKE_SYSTEM_*_PATH FRAMEWORK|LIBRARY|INCLUDE|PROGRAM
-  cmStdString CMakePathName; 
-  cmStdString EnvironmentPath; // LIB,INCLUDE
+  std::string EnvironmentPath; // LIB,INCLUDE
 
-  bool AlreadyInCache;
-  bool AlreadyInCacheWithoutMetaInfo;
-  bool NoDefaultPath;
-  bool NoCMakePath;
-  bool NoCMakeEnvironmentPath;
-  bool NoSystemEnvironmentPath;
-  bool NoCMakeSystemPath;
-  RootPathMode FindRootPathMode;
-  
-  bool SearchFrameworkFirst;
-  bool SearchFrameworkOnly;
-  bool SearchFrameworkLast;
-  
-  bool SearchAppBundleFirst;
-  bool SearchAppBundleOnly;
-  bool SearchAppBundleLast;
-  
+  bool AlreadyDefined = false;
+  bool AlreadyInCacheWithoutMetaInfo = false;
+  bool StoreResultInCache = true;
+
+  bool Required = false;
+
+private:
+  // Add pieces of the search.
+  void FillPackageRootPath();
+  void FillCMakeVariablePath();
+  void FillCMakeEnvironmentPath();
+  void FillUserHintsPath();
+  void FillSystemEnvironmentPath();
+  void FillCMakeSystemVariablePath();
+  void FillUserGuessPath();
 };
 
+class cmFindBaseDebugState
+{
+public:
+  explicit cmFindBaseDebugState(std::string name, cmFindBase const* findBase);
+  ~cmFindBaseDebugState();
 
+  void FoundAt(std::string const& path, std::string regexName = std::string());
+  void FailedAt(std::string const& path,
+                std::string regexName = std::string());
 
-#endif
+private:
+  struct DebugLibState
+  {
+    DebugLibState() = default;
+    DebugLibState(std::string&& n, std::string p)
+      : regexName(n)
+      , path(std::move(p))
+    {
+    }
+    std::string regexName;
+    std::string path;
+  };
+
+  cmFindBase const* FindCommand;
+  std::string CommandName;
+  std::vector<DebugLibState> FailedSearchLocations;
+  DebugLibState FoundSearchLocation;
+};

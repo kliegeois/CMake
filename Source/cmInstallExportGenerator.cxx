@@ -1,272 +1,223 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
-#include <stdio.h>
-
-#include "cmInstallTargetGenerator.h"
-#include "cmGeneratedFileStream.h"
-#include "cmTarget.h"
-
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmInstallExportGenerator.h"
-#include "cmInstallFilesGenerator.h"
+
+#include <algorithm>
+#include <map>
+#include <sstream>
+#include <utility>
+
+#include <cm/memory>
+
+#ifndef CMAKE_BOOTSTRAP
+#  include "cmExportInstallAndroidMKGenerator.h"
+#endif
+#include "cmExportInstallFileGenerator.h"
+#include "cmExportSet.h"
+#include "cmInstallType.h"
+#include "cmLocalGenerator.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
 
 cmInstallExportGenerator::cmInstallExportGenerator(
-  const char* destination,
-  const char* file_permissions,
-  std::vector<std::string> const& configurations,
-  const char* component,
-  const char* filename, const char* prefix, const char* tempOutputDir)
-  :cmInstallGenerator(destination, configurations, component)
-  ,FilePermissions(file_permissions)
-  ,Filename(filename)
-  ,Prefix(prefix)
-  ,TempOutputDir(tempOutputDir)
+  cmExportSet* exportSet, std::string const& destination,
+  std::string file_permissions, std::vector<std::string> const& configurations,
+  std::string const& component, MessageLevel message, bool exclude_from_all,
+  std::string filename, std::string name_space, bool exportOld, bool android,
+  cmListFileBacktrace backtrace)
+  : cmInstallGenerator(destination, configurations, component, message,
+                       exclude_from_all, false, std::move(backtrace))
+  , ExportSet(exportSet)
+  , FilePermissions(std::move(file_permissions))
+  , FileName(std::move(filename))
+  , Namespace(std::move(name_space))
+  , ExportOld(exportOld)
+  , LocalGenerator(nullptr)
 {
+  if (android) {
+#ifndef CMAKE_BOOTSTRAP
+    this->EFGen = cm::make_unique<cmExportInstallAndroidMKGenerator>(this);
+#endif
+  } else {
+    this->EFGen = cm::make_unique<cmExportInstallFileGenerator>(this);
+  }
+  exportSet->AddInstallation(this);
 }
 
-/* Helper function which adds the install locations from the generator
-to the properties for this target.
-*/
-bool cmInstallExportGenerator::AddInstallLocations(cmTargetWithProperties* twp,
-                                           cmInstallTargetGenerator* generator,
-                                           const char* prefix)
+cmInstallExportGenerator::~cmInstallExportGenerator() = default;
+
+bool cmInstallExportGenerator::Compute(cmLocalGenerator* lg)
 {
-  if (generator == 0) // nothing to do
-    {
-    return true;
-    }
-
-  if (prefix == 0)
-    {
-    prefix = "";
-    }
-
-  const std::vector<std::string>& configs = generator->GetConfigurations();
-  if (configs.empty())
-    {
-    std::string propertyName = prefix;
-    propertyName += "LOCATION";
-    // check that this property doesn't exist yet and add it then
-    if (twp->Properties.find(propertyName.c_str()) == twp->Properties.end())
-      {
-      std::string destinationFilename = generator->GetDestination();
-      destinationFilename += "/";
-      destinationFilename += generator->GetInstallFilename(0);
-      twp->Properties[propertyName.c_str()] = destinationFilename;
-      }
-    else
-      {
-      return false;
-      }
-    }
-  else
-    {
-    for(std::vector<std::string>::const_iterator configIt = configs.begin();
-        configIt != configs.end();
-        ++configIt)
-      {
-      std::string propertyName = configIt->c_str();
-      propertyName +=  "_";
-      propertyName += prefix;
-      propertyName += "LOCATION";
-      // check that this property doesn't exist yet and add it then
-      if (twp->Properties.find(propertyName.c_str()) == twp->Properties.end())
-        {
-        std::string destinationFilename = generator->GetDestination();
-        destinationFilename += "/";
-        destinationFilename +=generator->GetInstallFilename(configIt->c_str());
-        twp->Properties[propertyName.c_str()] = destinationFilename;
-        }
-      else
-        {
-        return false;
-        }
-      }
-    }
+  this->LocalGenerator = lg;
+  this->ExportSet->Compute(lg);
   return true;
 }
 
-
-bool cmInstallExportGenerator::AddInstallLocations(cmTargetWithProperties* twp,
-                                           cmInstallFilesGenerator* generator,
-                                           const char* propertyName)
+void cmInstallExportGenerator::ComputeTempDir()
 {
-  if (generator == 0) // nothing to do
-    {
-    return true;
-    }
+  // Choose a temporary directory in which to generate the import
+  // files to be installed.
+  this->TempDir = cmStrCat(this->LocalGenerator->GetCurrentBinaryDirectory(),
+                           "/CMakeFiles/Export");
+  if (this->Destination.empty()) {
+    return;
+  }
+  this->TempDir += "/";
 
-  if ((propertyName == 0) || (*propertyName == '\0'))
-    {
-    return false;
+  // Enforce a maximum length.
+  bool useMD5 = false;
+#if defined(_WIN32) || defined(__CYGWIN__)
+  std::string::size_type const max_total_len = 250;
+#else
+  std::string::size_type const max_total_len = 1000;
+#endif
+  // Will generate files of the form "<temp-dir>/<base>-<config>.<ext>".
+  std::string::size_type const len = this->TempDir.size() + 1 +
+    this->FileName.size() + 1 + this->GetMaxConfigLength();
+  if (len < max_total_len) {
+    // Keep the total path length below the limit.
+    std::string::size_type const max_len = max_total_len - len;
+    if (this->Destination.size() > max_len) {
+      useMD5 = true;
     }
-
-  // check that this property doesn't exist yet and add it then
-  if (twp->Properties.find(propertyName) == twp->Properties.end())
-    {
-    twp->Properties[propertyName] = generator->GetDestination();
-    return true;
+  } else {
+    useMD5 = true;
+  }
+  if (useMD5) {
+    // Replace the destination path with a hash to keep it short.
+#ifndef CMAKE_BOOTSTRAP
+    this->TempDir += cmSystemTools::ComputeStringMD5(this->Destination);
+#endif
+  } else {
+    std::string dest = this->Destination;
+    // Avoid unix full paths.
+    if (dest[0] == '/') {
+      dest[0] = '_';
     }
-
-  return false;
+    // Avoid windows full paths by removing colons.
+    std::replace(dest.begin(), dest.end(), ':', '_');
+    // Avoid relative paths that go up the tree.
+    cmSystemTools::ReplaceString(dest, "../", "__/");
+    // Avoid spaces.
+    std::replace(dest.begin(), dest.end(), ' ', '_');
+    this->TempDir += dest;
+  }
 }
 
-
-bool cmInstallExportGenerator::SetExportSet(const char* name,
-                                       const std::vector<cmTargetExport*>* set)
+size_t cmInstallExportGenerator::GetMaxConfigLength() const
 {
-  if ((name == 0) || (*name == 0) || (set==0))
-    {
-    return false;
+  // Always use at least 8 for "noconfig".
+  size_t len = 8;
+  if (this->ConfigurationTypes->empty()) {
+    if (this->ConfigurationName.size() > 8) {
+      len = this->ConfigurationName.size();
     }
-
-  this->Name = name;
-
-  /* iterate over all targets in the set.
-  If a cmTargetWithProperties with the same name already exists in this 
-  generator, add the new properties to it. If the property already exists, 
-  fail with an error.
-  If no cmTargetWithProperties exists, create a new one.
-  */
-  for(std::vector<cmTargetExport*>::const_iterator it=set->begin();
-      it != set->end();
-      ++it)
-    {
-    std::string targetName = (*it)->Target->GetName();
-
-    cmTargetWithProperties* targetWithProps = 0;
-    for(unsigned int i=0; i<this->Targets.size(); i++)
-      {
-      if (targetName == this->Targets[i]->Target->GetName())
-        {
-        targetWithProps = this->Targets[i];
-        break;
-        }
-      }
-
-    if (targetWithProps == 0)
-      {
-      targetWithProps = new cmTargetWithProperties((*it)->Target);
-      this->Targets.push_back(targetWithProps);
-      }
-
-    if (this->AddInstallLocations(targetWithProps, (*it)->ArchiveGenerator, 
-                                  "ARCHIVE_") == false)
-      {
-      return false;
-      }
-    if (this->AddInstallLocations(targetWithProps, (*it)->RuntimeGenerator, 
-                                  "") == false)
-      {
-      return false;
-      }
-    if (this->AddInstallLocations(targetWithProps, (*it)->LibraryGenerator, 
-                                  "LIBRARY_") == false)
-      {
-      return false;
-      }
-    if (this->AddInstallLocations(targetWithProps, (*it)->HeaderGenerator, 
-                                  "PUBLIC_HEADER_LOCATION") == false)
-      {
-      return false;
+  } else {
+    for (std::string const& c : *this->ConfigurationTypes) {
+      if (c.size() > len) {
+        len = c.size();
       }
     }
-
-  return true;
+  }
+  return len;
 }
 
 void cmInstallExportGenerator::GenerateScript(std::ostream& os)
 {
-  // for the case that somebody exports the same set with the same file name 
-  // to different locations make the temp filename unique
-  char buf[64];
-  sprintf(buf, "%p", this);
-  this->ExportFilename = this->TempOutputDir;
-  this->ExportFilename += "/";
-  this->ExportFilename += this->Filename;
-  this->ExportFilename += ".";
-  this->ExportFilename += buf;
-
-  cmGeneratedFileStream exportFileStream(this->ExportFilename.c_str());
-  if(!exportFileStream)
-    {
+  // Skip empty sets.
+  if (this->ExportSet->GetTargetExports().empty()) {
+    std::ostringstream e;
+    e << "INSTALL(EXPORT) given unknown export \""
+      << this->ExportSet->GetName() << "\"";
+    cmSystemTools::Error(e.str());
     return;
+  }
+
+  // Create the temporary directory in which to store the files.
+  this->ComputeTempDir();
+  cmSystemTools::MakeDirectory(this->TempDir);
+
+  // Construct a temporary location for the file.
+  this->MainImportFile = cmStrCat(this->TempDir, '/', this->FileName);
+
+  // Generate the import file for this export set.
+  this->EFGen->SetExportFile(this->MainImportFile.c_str());
+  this->EFGen->SetNamespace(this->Namespace);
+  this->EFGen->SetExportOld(this->ExportOld);
+  if (this->ConfigurationTypes->empty()) {
+    if (!this->ConfigurationName.empty()) {
+      this->EFGen->AddConfiguration(this->ConfigurationName);
+    } else {
+      this->EFGen->AddConfiguration("");
     }
-
-  /* for every target add the IMPORT statements and set the properties
-    of the target.  */
-  for(std::vector<cmTargetWithProperties*>::const_iterator 
-      targetIt = this->Targets.begin();
-      targetIt != this->Targets.end();
-      ++targetIt)
-    {
-      switch ((*targetIt)->Target->GetType())
-        {
-        case cmTarget::EXECUTABLE:
-          exportFileStream << "ADD_EXECUTABLE(" << this->Prefix.c_str()
-                           << (*targetIt)->Target->GetName()
-                           << " IMPORT )\n";
-          break;
-        case cmTarget::STATIC_LIBRARY:
-          exportFileStream << "ADD_LIBRARY(" << this->Prefix.c_str() 
-                           << (*targetIt)->Target->GetName() 
-                           << " STATIC IMPORT )\n";
-          break;
-        case cmTarget::SHARED_LIBRARY:
-          exportFileStream << "ADD_LIBRARY(" << this->Prefix.c_str() 
-                           << (*targetIt)->Target->GetName()
-                           << " SHARED IMPORT )\n";
-          break;
-        case cmTarget::MODULE_LIBRARY:
-          exportFileStream << "ADD_LIBRARY(" << this->Prefix.c_str() 
-                           << (*targetIt)->Target->GetName()
-                           << " MODULE IMPORT )\n";
-          break;
-        default:  // should never happen
-          break;
-        }
-
-      exportFileStream << "SET_TARGET_PROPERTIES ( " << this->Prefix.c_str() 
-                       << (*targetIt)->Target->GetName() << " PROPERTIES \n";
-
-      for (std::map<std::string, std::string>::const_iterator
-           propIt = (*targetIt)->Properties.begin();
-           propIt != (*targetIt)->Properties.end();
-           ++propIt)
-        {
-        exportFileStream << "                     " << propIt->first 
-                         << " \"" << propIt->second << "\"\n";
-        }
-      exportFileStream << "                      )\n\n";
+  } else {
+    for (std::string const& c : *this->ConfigurationTypes) {
+      this->EFGen->AddConfiguration(c);
     }
+  }
+  this->EFGen->GenerateImportFile();
 
   // Perform the main install script generation.
   this->cmInstallGenerator::GenerateScript(os);
 }
 
-//----------------------------------------------------------------------------
-void cmInstallExportGenerator::GenerateScriptActions(std::ostream& os,
-                                                     Indent const& indent)
+void cmInstallExportGenerator::GenerateScriptConfigs(std::ostream& os,
+                                                     Indent indent)
 {
-  // install rule for the file created above
-  std::vector<std::string> exportFile;
-  exportFile.push_back(this->ExportFilename);
-  this->AddInstallRule(os, this->Destination.c_str(), cmTarget::INSTALL_FILES,
-                       exportFile, false, 0,
-                       this->FilePermissions.c_str(),
-                       0, this->Filename.c_str(), 0, indent);
+  // Create the main install rules first.
+  this->cmInstallGenerator::GenerateScriptConfigs(os, indent);
+
+  // Now create a configuration-specific install rule for the import
+  // file of each configuration.
+  std::vector<std::string> files;
+  for (auto const& i : this->EFGen->GetConfigImportFiles()) {
+    files.push_back(i.second);
+    std::string config_test = this->CreateConfigTest(i.first);
+    os << indent << "if(" << config_test << ")\n";
+    this->AddInstallRule(os, this->Destination, cmInstallType_FILES, files,
+                         false, this->FilePermissions.c_str(), nullptr,
+                         nullptr, nullptr, indent.Next());
+    os << indent << "endif()\n";
+    files.clear();
+  }
+}
+
+void cmInstallExportGenerator::GenerateScriptActions(std::ostream& os,
+                                                     Indent indent)
+{
+  // Remove old per-configuration export files if the main changes.
+  std::string installedDir = cmStrCat(
+    "$ENV{DESTDIR}", ConvertToAbsoluteDestination(this->Destination), '/');
+  std::string installedFile = cmStrCat(installedDir, this->FileName);
+  os << indent << "if(EXISTS \"" << installedFile << "\")\n";
+  Indent indentN = indent.Next();
+  Indent indentNN = indentN.Next();
+  Indent indentNNN = indentNN.Next();
+  /* clang-format off */
+  os << indentN << "file(DIFFERENT EXPORT_FILE_CHANGED FILES\n"
+     << indentN << "     \"" << installedFile << "\"\n"
+     << indentN << "     \"" << this->MainImportFile << "\")\n";
+  os << indentN << "if(EXPORT_FILE_CHANGED)\n";
+  os << indentNN << "file(GLOB OLD_CONFIG_FILES \"" << installedDir
+     << this->EFGen->GetConfigImportFileGlob() << "\")\n";
+  os << indentNN << "if(OLD_CONFIG_FILES)\n";
+  os << indentNNN << R"(message(STATUS "Old export file \")" << installedFile
+     << "\\\" will be replaced.  Removing files [${OLD_CONFIG_FILES}].\")\n";
+  os << indentNNN << "file(REMOVE ${OLD_CONFIG_FILES})\n";
+  os << indentNN << "endif()\n";
+  os << indentN << "endif()\n";
+  os << indent << "endif()\n";
+  /* clang-format on */
+
+  // Install the main export file.
+  std::vector<std::string> files;
+  files.push_back(this->MainImportFile);
+  this->AddInstallRule(os, this->Destination, cmInstallType_FILES, files,
+                       false, this->FilePermissions.c_str(), nullptr, nullptr,
+                       nullptr, indent);
+}
+
+std::string cmInstallExportGenerator::GetDestinationFile() const
+{
+  return this->Destination + '/' + this->FileName;
 }

@@ -1,40 +1,33 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
-#ifndef AddCacheEntry_h
-#define AddCacheEntry_h
-
-#include <QWidget>
-#include <QCheckBox>
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
 #include "QCMake.h"
+#include <QCheckBox>
+#include <QStringList>
+#include <QWidget>
+
 #include "ui_AddCacheEntry.h"
 
-class AddCacheEntry : public QWidget, public Ui::AddCacheEntry
+class AddCacheEntry
+  : public QWidget
+  , public Ui::AddCacheEntry
 {
   Q_OBJECT
 public:
-  AddCacheEntry(QWidget* p);
+  AddCacheEntry(QWidget* p, const QStringList& varNames,
+                const QStringList& varTypes);
 
   QString name() const;
   QVariant value() const;
   QString description() const;
-  QCMakeCacheProperty::PropertyType type() const;
+  QCMakeProperty::PropertyType type() const;
+  QString typeString() const;
+
+private slots:
+  void onCompletionActivated(const QString& text);
+
+private:
+  const QStringList& VarNames;
+  const QStringList& VarTypes;
 };
-
-#endif
-

@@ -1,23 +1,18 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmCTestSubmitCommand_h
-#define cmCTestSubmitCommand_h
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "cmCTestHandlerCommand.h"
+
+class cmCommand;
+class cmCTestGenericHandler;
+class cmExecutionStatus;
 
 /** \class cmCTestSubmit
  * \brief Run a ctest script
@@ -28,48 +23,34 @@
 class cmCTestSubmitCommand : public cmCTestHandlerCommand
 {
 public:
+  std::unique_ptr<cmCommand> Clone() override;
 
-  cmCTestSubmitCommand() {}
-
-  /**
-   * This is a virtual constructor for the command.
-   */
-  virtual cmCommand* Clone()
-    {
-    cmCTestSubmitCommand* ni = new cmCTestSubmitCommand;
-    ni->CTest = this->CTest;
-    ni->CTestScriptHandler = this->CTestScriptHandler;
-    return ni;
-    }
+  bool InitialPass(std::vector<std::string> const& args,
+                   cmExecutionStatus& status) override;
 
   /**
    * The name of the command as specified in CMakeList.txt.
    */
-  virtual const char* GetName() { return "CTEST_SUBMIT";}
-
-  /**
-   * Succinct documentation.
-   */
-  virtual const char* GetTerseDocumentation()
-    {
-    return "Submits the repository.";
-    }
-
-  /**
-   * More documentation.
-   */
-  virtual const char* GetFullDocumentation()
-    {
-    return
-      "  CTEST_SUBMIT([RETURN_VALUE res])\n"
-      "Submits the test results for the project.";
-    }
-
-  cmTypeMacro(cmCTestSubmitCommand, cmCTestHandlerCommand);
+  std::string GetName() const override { return "ctest_submit"; }
 
 protected:
-  cmCTestGenericHandler* InitializeHandler();
+  void BindArguments() override;
+  void CheckArguments(std::vector<std::string> const& keywords) override;
+  cmCTestGenericHandler* InitializeHandler() override;
+
+  bool CDashUpload = false;
+  bool FilesMentioned = false;
+  bool InternalTest = false;
+  bool PartsMentioned = false;
+
+  std::string BuildID;
+  std::string CDashUploadFile;
+  std::string CDashUploadType;
+  std::string RetryCount;
+  std::string RetryDelay;
+  std::string SubmitURL;
+
+  std::vector<std::string> Files;
+  std::vector<std::string> HttpHeaders;
+  std::vector<std::string> Parts;
 };
-
-
-#endif

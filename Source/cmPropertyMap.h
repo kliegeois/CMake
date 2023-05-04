@@ -1,45 +1,55 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
+#include "cmValue.h"
 
-=========================================================================*/
-#ifndef cmPropertyMap_h
-#define cmPropertyMap_h
-
-#include "cmProperty.h"
-
-class cmake;
-
-class cmPropertyMap : public std::map<cmStdString,cmProperty>
+/** \class cmPropertyMap
+ * \brief String property map.
+ */
+class cmPropertyMap
 {
 public:
-  cmProperty *GetOrCreateProperty(const char *name);
+  // -- General
 
-  void SetProperty(const char *name, const char *value, 
-                   cmProperty::ScopeType scope);
+  //! Clear property list
+  void Clear();
 
-  const char *GetPropertyValue(const char *name, 
-                               cmProperty::ScopeType scope,
-                               bool &chain) const;
+  // -- Properties
 
-  void SetCMakeInstance(cmake *cm) { this->CMakeInstance = cm; };
+  //! Set the property value
+  void SetProperty(const std::string& name, const char* value);
+  void SetProperty(const std::string& name, cmValue value);
+  void SetProperty(const std::string& name, const std::string& value)
+  {
+    this->SetProperty(name, cmValue(value));
+  }
 
-  cmPropertyMap() { this->CMakeInstance = 0;};
+  //! Append to the property value
+  void AppendProperty(const std::string& name, const std::string& value,
+                      bool asString = false);
+
+  //! Get the property value
+  cmValue GetPropertyValue(const std::string& name) const;
+
+  //! Remove the property @a name from the map
+  void RemoveProperty(const std::string& name);
+
+  // -- Lists
+
+  //! Get a sorted list of property keys
+  std::vector<std::string> GetKeys() const;
+
+  //! Get a sorted by key list of property key,value pairs
+  std::vector<std::pair<std::string, std::string>> GetList() const;
 
 private:
-  cmake *CMakeInstance;
+  std::unordered_map<std::string, std::string> Map_;
 };
-
-#endif
-

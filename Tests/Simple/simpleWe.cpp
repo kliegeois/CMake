@@ -1,12 +1,9 @@
 #include <stdio.h>
 
-class Foo 
+class Foo
 {
 public:
-  Foo()
-    {
-      printf("This one has nonstandard extension\n");
-    }
+  Foo() { printf("This one has nonstandard extension\n"); }
   int getnum() { return 0; }
 };
 

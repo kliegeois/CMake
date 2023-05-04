@@ -1,215 +1,285 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#include "windows.h" // this must be first to define GetCurrentDirectory
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalVisualStudio7Generator.h"
+
+#include <cassert>
+#include <utility>
+#include <vector>
+
+#include <cm/memory>
+#include <cm/string_view>
+
+#include <windows.h>
+
+#include "cmsys/Encoding.hxx"
+
 #include "cmGeneratedFileStream.h"
+#include "cmGeneratorExpression.h"
+#include "cmGeneratorTarget.h"
 #include "cmLocalVisualStudio7Generator.h"
 #include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmState.h"
+#include "cmStringAlgorithms.h"
+#include "cmUuid.h"
 #include "cmake.h"
 
-cmGlobalVisualStudio7Generator::cmGlobalVisualStudio7Generator()
+static cmVS7FlagTable cmVS7ExtraFlagTable[] = {
+  // Precompiled header and related options.  Note that the
+  // UsePrecompiledHeader entries are marked as "Continue" so that the
+  // corresponding PrecompiledHeaderThrough entry can be found.
+  { "UsePrecompiledHeader", "YX", "Automatically Generate", "2",
+    cmVS7FlagTable::UserValueIgnored | cmVS7FlagTable::Continue },
+  { "PrecompiledHeaderThrough", "YX", "Precompiled Header Name", "",
+    cmVS7FlagTable::UserValueRequired },
+  { "UsePrecompiledHeader", "Yu", "Use Precompiled Header", "3",
+    cmVS7FlagTable::UserValueIgnored | cmVS7FlagTable::Continue },
+  { "PrecompiledHeaderThrough", "Yu", "Precompiled Header Name", "",
+    cmVS7FlagTable::UserValueRequired },
+  { "UsePrecompiledHeader", "Y-", "Don't use precompiled header", "0", 0 },
+  { "WholeProgramOptimization", "LTCG", "WholeProgramOptimization", "true",
+    0 },
+
+  // Exception handling mode.  If no entries match, it will be FALSE.
+  { "ExceptionHandling", "GX", "enable c++ exceptions", "true", 0 },
+  { "ExceptionHandling", "EHsc", "enable c++ exceptions", "true", 0 },
+  // The EHa option does not have an IDE setting.  Let it go to false,
+  // and have EHa passed on the command line by leaving out the table
+  // entry.
+
+  { "", "", "", "", 0 }
+};
+
+namespace {
+std::string GetSLNFile(cmLocalGenerator* root)
 {
-  this->FindMakeProgramFile = "CMakeVS7FindMake.cmake";
+  return cmStrCat(root->GetCurrentBinaryDirectory(), '/',
+                  root->GetProjectName(), ".sln");
+}
 }
 
-
-void cmGlobalVisualStudio7Generator
-::EnableLanguage(std::vector<std::string>const &  lang, 
-                 cmMakefile *mf, bool optional)
+cmGlobalVisualStudio7Generator::cmGlobalVisualStudio7Generator(
+  cmake* cm, std::string const& platformInGeneratorName)
+  : cmGlobalVisualStudioGenerator(cm, platformInGeneratorName)
 {
-  mf->AddDefinition("CMAKE_GENERATOR_CC", "cl");
-  mf->AddDefinition("CMAKE_GENERATOR_CXX", "cl");
+  this->DevEnvCommandInitialized = false;
+  this->MasmEnabled = false;
+  this->NasmEnabled = false;
+  this->ExtraFlagTable = cmVS7ExtraFlagTable;
+}
+
+cmGlobalVisualStudio7Generator::~cmGlobalVisualStudio7Generator()
+{
+}
+
+// Package GUID of Intel Visual Fortran plugin to VS IDE
+#define CM_INTEL_PLUGIN_GUID "{B68A201D-CB9B-47AF-A52F-7EEC72E217E4}"
+
+const std::string& cmGlobalVisualStudio7Generator::GetIntelProjectVersion()
+{
+  if (this->IntelProjectVersion.empty()) {
+    // Compute the version of the Intel plugin to the VS IDE.
+    // If the key does not exist then use a default guess.
+    std::string intelVersion;
+    std::string vskey =
+      cmStrCat(this->GetRegistryBase(),
+               "\\Packages\\" CM_INTEL_PLUGIN_GUID ";ProductVersion");
+    cmSystemTools::ReadRegistryValue(vskey, intelVersion,
+                                     cmSystemTools::KeyWOW64_32);
+    unsigned int intelVersionNumber = ~0u;
+    sscanf(intelVersion.c_str(), "%u", &intelVersionNumber);
+    if (intelVersionNumber >= 11) {
+      // Default to latest known project file version.
+      intelVersion = "11.0";
+    } else if (intelVersionNumber == 10) {
+      // Version 10.x actually uses 9.10 in project files!
+      intelVersion = "9.10";
+    } else {
+      // Version <= 9: use ProductVersion from registry.
+    }
+    this->IntelProjectVersion = intelVersion;
+  }
+  return this->IntelProjectVersion;
+}
+
+void cmGlobalVisualStudio7Generator::EnableLanguage(
+  std::vector<std::string> const& lang, cmMakefile* mf, bool optional)
+{
   mf->AddDefinition("CMAKE_GENERATOR_RC", "rc");
   mf->AddDefinition("CMAKE_GENERATOR_NO_COMPILER_ENV", "1");
-  mf->AddDefinition("CMAKE_GENERATOR_Fortran", "ifort");
+  mf->InitCMAKE_CONFIGURATION_TYPES("Debug;Release;MinSizeRel;RelWithDebInfo");
 
-  this->AddPlatformDefinitions(mf);
-  
   // Create list of configurations requested by user's cache, if any.
-  this->cmGlobalGenerator::EnableLanguage(lang, mf, optional);
-  this->GenerateConfigurations(mf);
-  
+  this->cmGlobalVisualStudioGenerator::EnableLanguage(lang, mf, optional);
+
   // if this environment variable is set, then copy it to
-  // a static cache entry.  It will be used by 
+  // a static cache entry.  It will be used by
   // cmLocalGenerator::ConstructScript, to add an extra PATH
   // to all custom commands.   This is because the VS IDE
   // does not use the environment it is run in, and this allows
   // for running commands and using dll's that the IDE environment
   // does not know about.
-  const char* extraPath = cmSystemTools::GetEnv("CMAKE_MSVCIDE_RUN_PATH");
-  if(extraPath)
-    {
-    mf->AddCacheDefinition
-      ("CMAKE_MSVCIDE_RUN_PATH", extraPath, 
-       "Saved environment variable CMAKE_MSVCIDE_RUN_PATH",
-       cmCacheManager::STATIC);
-    }
-
+  std::string extraPath;
+  if (cmSystemTools::GetEnv("CMAKE_MSVCIDE_RUN_PATH", extraPath)) {
+    mf->AddCacheDefinition("CMAKE_MSVCIDE_RUN_PATH", extraPath,
+                           "Saved environment variable CMAKE_MSVCIDE_RUN_PATH",
+                           cmStateEnums::STATIC);
+  }
 }
 
-void cmGlobalVisualStudio7Generator::AddPlatformDefinitions(cmMakefile* mf)
+bool cmGlobalVisualStudio7Generator::FindMakeProgram(cmMakefile* mf)
 {
-  mf->AddDefinition("MSVC70", "1");
+  if (!this->cmGlobalVisualStudioGenerator::FindMakeProgram(mf)) {
+    return false;
+  }
+  mf->AddDefinition("CMAKE_VS_DEVENV_COMMAND", this->GetDevEnvCommand());
+  return true;
 }
 
-std::string cmGlobalVisualStudio7Generator
-::GenerateBuildCommand(const char* makeProgram,
-                       const char *projectName, 
-                       const char* additionalOptions, const char *targetName,
-                       const char* config, bool ignoreErrors, bool)
+std::string const& cmGlobalVisualStudio7Generator::GetDevEnvCommand()
 {
-  // Ingoring errors is not implemented in visual studio 6
-  (void) ignoreErrors;
+  if (!this->DevEnvCommandInitialized) {
+    this->DevEnvCommandInitialized = true;
+    this->DevEnvCommand = this->FindDevEnvCommand();
+  }
+  return this->DevEnvCommand;
+}
 
-  // now build the test
-  std::string makeCommand = 
-    cmSystemTools::ConvertToOutputPath(makeProgram);
-  std::string lowerCaseCommand = makeCommand;
-  cmSystemTools::LowerCase(lowerCaseCommand);
+std::string cmGlobalVisualStudio7Generator::FindDevEnvCommand()
+{
+  std::string vscmd;
+  std::string vskey;
 
-  // if there are spaces in the makeCommand, assume a full path
-  // and convert it to a path with no spaces in it as the
-  // RunSingleCommand does not like spaces
-#if defined(_WIN32) && !defined(__CYGWIN__)      
-  if(makeCommand.find(' ') != std::string::npos)
-    {
-    cmSystemTools::GetShortPath(makeCommand.c_str(), makeCommand);
+  // Search in standard location.
+  vskey = this->GetRegistryBase() + ";InstallDir";
+  if (cmSystemTools::ReadRegistryValue(vskey.c_str(), vscmd,
+                                       cmSystemTools::KeyWOW64_32)) {
+    cmSystemTools::ConvertToUnixSlashes(vscmd);
+    vscmd += "/devenv.com";
+    if (cmSystemTools::FileExists(vscmd, true)) {
+      return vscmd;
     }
+  }
+
+  // Search where VS15Preview places it.
+  vskey = cmStrCat(
+    "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\SxS\\VS7;",
+    this->GetIDEVersion());
+  if (cmSystemTools::ReadRegistryValue(vskey.c_str(), vscmd,
+                                       cmSystemTools::KeyWOW64_32)) {
+    cmSystemTools::ConvertToUnixSlashes(vscmd);
+    vscmd += "/Common7/IDE/devenv.com";
+    if (cmSystemTools::FileExists(vscmd, true)) {
+      return vscmd;
+    }
+  }
+
+  vscmd = "devenv.com";
+  return vscmd;
+}
+
+const char* cmGlobalVisualStudio7Generator::ExternalProjectType(
+  const std::string& location)
+{
+  std::string extension = cmSystemTools::GetFilenameLastExtension(location);
+  if (extension == ".vbproj") {
+    return "F184B08F-C81C-45F6-A57F-5ABD9991F28F";
+  } else if (extension == ".csproj") {
+    return "FAE04EC0-301F-11D3-BF4B-00C04F79EFBC";
+  } else if (extension == ".fsproj") {
+    return "F2A71F9B-5D33-465A-A702-920D77279786";
+  } else if (extension == ".vdproj") {
+    return "54435603-DBB4-11D2-8724-00A0C9A8B90C";
+  } else if (extension == ".dbproj") {
+    return "C8D11400-126E-41CD-887F-60BD40844F9E";
+  } else if (extension == ".wixproj") {
+    return "930C7802-8A8C-48F9-8165-68863BCCD9DD";
+  } else if (extension == ".pyproj") {
+    return "888888A0-9F3D-457C-B088-3A5042F75D52";
+  }
+  return "8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942";
+}
+
+std::vector<cmGlobalGenerator::GeneratedMakeCommand>
+cmGlobalVisualStudio7Generator::GenerateBuildCommand(
+  const std::string& makeProgram, const std::string& projectName,
+  const std::string& /*projectDir*/,
+  std::vector<std::string> const& targetNames, const std::string& config,
+  bool /*fast*/, int /*jobs*/, bool /*verbose*/,
+  std::vector<std::string> const& makeOptions)
+{
+  // Select the caller- or user-preferred make program, else devenv.
+  std::string makeProgramSelected =
+    this->SelectMakeProgram(makeProgram, this->GetDevEnvCommand());
+
+  // Ignore the above preference if it is msbuild.
+  // Assume any other value is either a devenv or
+  // command-line compatible with devenv.
+  std::string makeProgramLower = makeProgramSelected;
+  cmSystemTools::LowerCase(makeProgramLower);
+  if (makeProgramLower.find("msbuild") != std::string::npos) {
+    makeProgramSelected = this->GetDevEnvCommand();
+  }
+
+  // Workaround to convince VCExpress.exe to produce output.
+  const bool requiresOutputForward =
+    (makeProgramLower.find("vcexpress") != std::string::npos);
+  std::vector<GeneratedMakeCommand> makeCommands;
+
+  std::vector<std::string> realTargetNames = targetNames;
+  if (targetNames.empty() ||
+      ((targetNames.size() == 1) && targetNames.front().empty())) {
+    realTargetNames = { "ALL_BUILD" };
+  }
+  for (const auto& tname : realTargetNames) {
+    std::string realTarget;
+    if (!tname.empty()) {
+      realTarget = tname;
+    } else {
+      continue;
+    }
+    bool clean = false;
+    if (realTarget == "clean") {
+      clean = true;
+      realTarget = "ALL_BUILD";
+    }
+    GeneratedMakeCommand makeCommand;
+    makeCommand.RequiresOutputForward = requiresOutputForward;
+    makeCommand.Add(makeProgramSelected);
+    makeCommand.Add(projectName + ".sln");
+    makeCommand.Add((clean ? "/clean" : "/build"));
+    makeCommand.Add((config.empty() ? "Debug" : config));
+    makeCommand.Add("/project");
+    makeCommand.Add(realTarget);
+    makeCommand.Add(makeOptions.begin(), makeOptions.end());
+    makeCommands.emplace_back(std::move(makeCommand));
+  }
+  return makeCommands;
+}
+
+//! Create a local generator appropriate to this Global Generator
+std::unique_ptr<cmLocalGenerator>
+cmGlobalVisualStudio7Generator::CreateLocalGenerator(cmMakefile* mf)
+{
+  auto lg = cm::make_unique<cmLocalVisualStudio7Generator>(this, mf);
+  return std::unique_ptr<cmLocalGenerator>(std::move(lg));
+}
+
+#if !defined(CMAKE_BOOTSTRAP)
+Json::Value cmGlobalVisualStudio7Generator::GetJson() const
+{
+  Json::Value generator = this->cmGlobalVisualStudioGenerator::GetJson();
+  generator["platform"] = this->GetPlatformName();
+  return generator;
+}
 #endif
-  makeCommand += " ";
-  makeCommand += projectName;
-  makeCommand += ".sln ";
-  bool clean = false;
-  if ( targetName && strcmp(targetName, "clean") == 0 )
-    {
-    clean = true;
-    targetName = "ALL_BUILD";
-    }
-  if(clean)
-    {
-    makeCommand += "/clean ";
-    }
-  else
-    {
-    makeCommand += "/build ";
-    }
 
-  if(config && strlen(config))
-    {
-    makeCommand += config;
-    }
-  else
-    {
-    makeCommand += "Debug";
-    }
-  makeCommand += " /project ";
-
-  if (targetName && strlen(targetName))
-    {
-    makeCommand += targetName;
-    }
-  else
-    {
-    makeCommand += "ALL_BUILD";
-    }
-  if ( additionalOptions )
-    {
-    makeCommand += " ";
-    makeCommand += additionalOptions;
-    }
-  return makeCommand;
-}
-
-///! Create a local generator appropriate to this Global Generator
-cmLocalGenerator *cmGlobalVisualStudio7Generator::CreateLocalGenerator()
+bool cmGlobalVisualStudio7Generator::SetSystemName(std::string const& s,
+                                                   cmMakefile* mf)
 {
-  cmLocalVisualStudio7Generator *lg = new cmLocalVisualStudio7Generator;
-  lg->SetExtraFlagTable(this->GetExtraFlagTableVS7());
-  lg->SetGlobalGenerator(this);
-  return lg;
-}
-
-void cmGlobalVisualStudio7Generator::GenerateConfigurations(cmMakefile* mf)
-{
-  // process the configurations
-  const char* ct 
-    = this->CMakeInstance->GetCacheDefinition("CMAKE_CONFIGURATION_TYPES");
-  if ( ct )
-    {
-    std::string configTypes = ct;
-    
-    std::string::size_type start = 0;
-    std::string::size_type endpos = 0;
-    while(endpos != std::string::npos)
-      {
-      endpos = configTypes.find_first_of(" ;", start);
-      std::string config;
-      std::string::size_type len;
-      if(endpos != std::string::npos)
-        {
-        len = endpos - start;
-        }
-      else
-        {
-        len = configTypes.size() - start;
-        }
-      config = configTypes.substr(start, len);
-      if(config == "Debug" || config == "Release" ||
-         config == "MinSizeRel" || config == "RelWithDebInfo")
-        {
-        // only add unique configurations
-        if(std::find(this->Configurations.begin(), 
-                     this->Configurations.end(),
-                     config) == this->Configurations.end())
-          {
-          this->Configurations.push_back(config);
-          }
-        }
-      else
-        {
-        cmSystemTools::Error(
-          "Invalid configuration type in CMAKE_CONFIGURATION_TYPES: ",
-          config.c_str(),
-          " (Valid types are Debug,Release,MinSizeRel,RelWithDebInfo)");
-        }
-      start = endpos+1;
-      }
-    }
-  if(this->Configurations.size() == 0)
-    {
-    this->Configurations.push_back("Debug");
-    this->Configurations.push_back("Release");
-    }
-  
-  // Reset the entry to have a semi-colon separated list.
-  std::string configs = this->Configurations[0];
-  for(unsigned int i=1; i < this->Configurations.size(); ++i)
-    {
-    configs += ";";
-    configs += this->Configurations[i];
-    }
-
-  mf->AddCacheDefinition(
-    "CMAKE_CONFIGURATION_TYPES",
-    configs.c_str(),
-    "Semicolon separated list of supported configuration types, "
-    "only supports Debug, Release, MinSizeRel, and RelWithDebInfo, "
-    "anything else will be ignored.",
-    cmCacheManager::STRING);
+  mf->AddDefinition("CMAKE_VS_INTEL_Fortran_PROJECT_VERSION",
+                    this->GetIntelProjectVersion());
+  return this->cmGlobalVisualStudioGenerator::SetSystemName(s, mf);
 }
 
 void cmGlobalVisualStudio7Generator::Generate()
@@ -219,611 +289,441 @@ void cmGlobalVisualStudio7Generator::Generate()
 
   // Now write out the DSW
   this->OutputSLNFile();
-
   // If any solution or project files changed during the generation,
   // tell Visual Studio to reload them...
-  if(!cmSystemTools::GetErrorOccuredFlag())
-    {
-    this->CallVisualStudioMacro(MacroReload);
+  if (!cmSystemTools::GetErrorOccuredFlag() &&
+      !this->LocalGenerators.empty()) {
+    this->CallVisualStudioMacro(MacroReload,
+                                GetSLNFile(this->LocalGenerators[0].get()));
+  }
+
+  if (this->Version == VS10 && !this->CMakeInstance->GetIsInTryCompile()) {
+    std::string cmakeWarnVS10;
+    if (cmValue cached = this->CMakeInstance->GetState()->GetCacheEntryValue(
+          "CMAKE_WARN_VS10")) {
+      this->CMakeInstance->MarkCliAsUsed("CMAKE_WARN_VS10");
+      cmakeWarnVS10 = *cached;
+    } else {
+      cmSystemTools::GetEnv("CMAKE_WARN_VS10", cmakeWarnVS10);
     }
+    if (cmakeWarnVS10.empty() || !cmIsOff(cmakeWarnVS10)) {
+      this->CMakeInstance->IssueMessage(
+        MessageType::WARNING,
+        "The \"Visual Studio 10 2010\" generator is deprecated "
+        "and will be removed in a future version of CMake."
+        "\n"
+        "Add CMAKE_WARN_VS10=OFF to the cache to disable this warning.");
+    }
+  }
 }
 
-void cmGlobalVisualStudio7Generator
-::OutputSLNFile(cmLocalGenerator* root,
-                std::vector<cmLocalGenerator*>& generators)
+void cmGlobalVisualStudio7Generator::OutputSLNFile(
+  cmLocalGenerator* root, std::vector<cmLocalGenerator*>& generators)
 {
-  if(generators.size() == 0)
-    {
+  if (generators.empty()) {
     return;
-    }
-  this->CurrentProject = root->GetMakefile()->GetProjectName();
-  std::string fname = root->GetMakefile()->GetStartOutputDirectory();
-  fname += "/";
-  fname += root->GetMakefile()->GetProjectName();
-  fname += ".sln";
+  }
+  this->CurrentProject = root->GetProjectName();
+  std::string fname = GetSLNFile(root);
   cmGeneratedFileStream fout(fname.c_str());
   fout.SetCopyIfDifferent(true);
-  if(!fout)
-    {
+  if (!fout) {
     return;
-    }
+  }
   this->WriteSLNFile(fout, root, generators);
-  if (fout.Close())
-    {
+  if (fout.Close()) {
     this->FileReplacedDuringGenerate(fname);
-    }
+  }
 }
 
 // output the SLN file
 void cmGlobalVisualStudio7Generator::OutputSLNFile()
 {
-  std::map<cmStdString, std::vector<cmLocalGenerator*> >::iterator it;
-  for(it = this->ProjectMap.begin(); it!= this->ProjectMap.end(); ++it)
-    {
-    this->OutputSLNFile(it->second[0], it->second);
-    }
+  for (auto& it : this->ProjectMap) {
+    this->OutputSLNFile(it.second[0], it.second);
+  }
 }
 
-
-// Write a SLN file to the stream
-void cmGlobalVisualStudio7Generator
-::WriteSLNFile(std::ostream& fout,
-               cmLocalGenerator* root,
-               std::vector<cmLocalGenerator*>& generators)
+void cmGlobalVisualStudio7Generator::WriteTargetConfigurations(
+  std::ostream& fout, std::vector<std::string> const& configs,
+  OrderedTargetDependSet const& projectTargets)
 {
-  // Write out the header for a SLN file
-  this->WriteSLNHeader(fout);
-  
-  // Get the start directory with the trailing slash
-  std::string rootdir = root->GetMakefile()->GetStartOutputDirectory();
-  rootdir += "/";
-  bool doneAllBuild = false;
-  bool doneRunTests = false;
-  bool doneInstall  = false;
-  bool doneEditCache = false;
-  bool doneRebuildCache = false;
-  bool donePackage = false;
-  
-  // For each cmMakefile, create a VCProj for it, and
-  // add it to this SLN file
-  unsigned int i;
-  for(i = 0; i < generators.size(); ++i)
-    {
-    if(this->IsExcluded(root, generators[i]))
-      {
+  // loop over again and write out configurations for each target
+  // in the solution
+  for (cmGeneratorTarget const* target : projectTargets) {
+    if (!target->IsInBuildSystem()) {
       continue;
-      }
-    cmMakefile* mf = generators[i]->GetMakefile();
-
-    // Get the source directory from the makefile
-    std::string dir = mf->GetStartOutputDirectory();
-    // remove the home directory and / from the source directory
-    // this gives a relative path 
-    cmSystemTools::ReplaceString(dir, rootdir.c_str(), "");
-
-    // Get the list of create dsp files names from the cmVCProjWriter, more
-    // than one dsp could have been created per input CMakeLists.txt file
-    // for each target
-    cmTargets &tgts = generators[i]->GetMakefile()->GetTargets();
-    for (cmTargets::iterator l = tgts.begin(); l != tgts.end(); ++l)
-      {
-      // special handling for the current makefile
-      if(mf == generators[0]->GetMakefile())
-        {
-        dir = "."; // no subdirectory for project generated
-        // if this is the special ALL_BUILD utility, then
-        // make it depend on every other non UTILITY project.
-        // This is done by adding the names to the GetUtilities
-        // vector on the makefile
-        if(l->first == "ALL_BUILD" && !doneAllBuild)
-          {
-          unsigned int j;
-          for(j = 0; j < generators.size(); ++j)
-            {
-            cmTargets &atgts = generators[j]->GetMakefile()->GetTargets();
-            for(cmTargets::iterator al = atgts.begin();
-                al != atgts.end(); ++al)
-              {
-              if (!al->second.GetPropertyAsBool("EXCLUDE_FROM_ALL"))
-                {
-                if (al->second.GetType() == cmTarget::UTILITY ||
-                    al->second.GetType() == cmTarget::GLOBAL_TARGET)
-                  {
-                  l->second.AddUtility(al->first.c_str());
-                  }
-                else
-                  {
-                  l->second.AddLinkLibrary(al->first,cmTarget::GENERAL);
-                  }
-                }
-              }
-            }
-          }
-        }
-      // Write the project into the SLN file
-      if (strncmp(l->first.c_str(), "INCLUDE_EXTERNAL_MSPROJECT", 26) == 0)
-        {
-        cmCustomCommand cc = l->second.GetPostBuildCommands()[0];
-        const cmCustomCommandLines& cmds = cc.GetCommandLines();
-        std::string project = cmds[0][0];
-        std::string location = cmds[0][1];
-        this->WriteExternalProject(fout, project.c_str(), 
-                                   location.c_str(), cc.GetDepends());
-        }
-      else 
-        {
-          bool skip = false;
-          if(l->first == "ALL_BUILD" )
-            {
-            if(doneAllBuild)
-              {
-              skip = true;
-              }
-            else
-              {
-              doneAllBuild = true;
-              }
-            }
-          if(l->first == "INSTALL")
-            {
-            if(doneInstall)
-              {
-              skip = true;
-              }
-            else
-              {
-              doneInstall = true;
-              }
-            }
-          if(l->first == "RUN_TESTS")
-            {
-            if(doneRunTests)
-              {
-              skip = true;
-              }
-            else
-              {
-              doneRunTests = true;
-              }
-            }
-          if(l->first == "EDIT_CACHE")
-            {
-            if(doneEditCache)
-              {
-              skip = true;
-              }
-            else
-              {
-              doneEditCache = true;
-              }
-            }
-          if(l->first == "REBUILD_CACHE")
-            {
-            if(doneRebuildCache)
-              {
-              skip = true;
-              }
-            else
-              {
-              doneRebuildCache = true;
-              }
-            }
-          if(l->first == "PACKAGE")
-            {
-            if(donePackage)
-              {
-              skip = true;
-              }
-            else
-              {
-              donePackage = true;
-              }
-            }
-          if(!skip)
-            {
-            const char *dspname = 
-              l->second.GetProperty("GENERATOR_FILE_NAME");
-            if (dspname)
-              {
-              this->WriteProject(fout, dspname, dir.c_str(),l->second);
-              }
-            }
-        }
+    }
+    cmValue expath = target->GetProperty("EXTERNAL_MSPROJECT");
+    if (expath) {
+      std::set<std::string> allConfigurations(configs.begin(), configs.end());
+      cmValue mapping = target->GetProperty("VS_PLATFORM_MAPPING");
+      this->WriteProjectConfigurations(fout, target->GetName(), *target,
+                                       configs, allConfigurations,
+                                       mapping ? *mapping : "");
+    } else {
+      const std::set<std::string>& configsPartOfDefaultBuild =
+        this->IsPartOfDefaultBuild(configs, projectTargets, target);
+      cmValue vcprojName = target->GetProperty("GENERATOR_FILE_NAME");
+      if (vcprojName) {
+        this->WriteProjectConfigurations(fout, *vcprojName, *target, configs,
+                                         configsPartOfDefaultBuild);
       }
     }
-  fout << "Global\n"
-       << "\tGlobalSection(SolutionConfiguration) = preSolution\n";
-  
-  int c = 0;
-  for(std::vector<std::string>::iterator i = this->Configurations.begin();
-      i != this->Configurations.end(); ++i)
-    {
-    fout << "\t\tConfigName." << c << " = " << *i << "\n";
-    c++;
-    }
-  fout << "\tEndGlobalSection\n"
-       << "\tGlobalSection(ProjectDependencies) = postSolution\n";
-
-  // loop over again and compute the depends
-  for(i = 0; i < generators.size(); ++i)
-    {
-    cmMakefile* mf = generators[i]->GetMakefile();
-    cmLocalVisualStudio7Generator* pg =  
-      static_cast<cmLocalVisualStudio7Generator*>(generators[i]);
-    // Get the list of create dsp files names from the cmVCProjWriter, more
-    // than one dsp could have been created per input CMakeLists.txt file
-    // for each target
-    cmTargets &tgts = pg->GetMakefile()->GetTargets();
-    cmTargets::iterator l = tgts.begin();
-    std::string dir = mf->GetStartDirectory();
-    for(; l != tgts.end(); ++l)
-      {
-       if (strncmp(l->first.c_str(), "INCLUDE_EXTERNAL_MSPROJECT", 26) == 0)
-         {
-         cmCustomCommand cc = l->second.GetPostBuildCommands()[0];
-         const cmCustomCommandLines& cmds = cc.GetCommandLines();
-         std::string name = cmds[0][0];
-         std::vector<std::string> depends = cc.GetDepends();
-         std::vector<std::string>::iterator iter;
-         int depcount = 0;
-         for(iter = depends.begin(); iter != depends.end(); ++iter)
-           {
-           std::string guid = this->GetGUID(iter->c_str());
-           if(guid.size() == 0)
-             {
-             std::string m = "Target: ";
-             m += l->first;
-             m += " depends on unknown target: ";
-             m += iter->c_str();
-             cmSystemTools::Error(m.c_str());
-             }
-           
-           fout << "\t\t{" << this->GetGUID(name.c_str()) 
-                << "}." << depcount << " = {" << guid.c_str() << "}\n";
-           depcount++;
-           }
-         }
-       else
-        {
-        const char *dspname = 
-          l->second.GetProperty("GENERATOR_FILE_NAME");
-        if (dspname)
-          {
-          this->WriteProjectDepends(fout, dspname, 
-                                    dir.c_str(), l->second);
-          }
-        }
-      }
-    }
-  fout << "\tEndGlobalSection\n";
-  fout << "\tGlobalSection(ProjectConfiguration) = postSolution\n";
-  // loop over again and compute the depends
-  for(i = 0; i < generators.size(); ++i)
-    {
-    cmMakefile* mf = generators[i]->GetMakefile();
-    cmLocalVisualStudio7Generator* pg =  
-      static_cast<cmLocalVisualStudio7Generator*>(generators[i]);
-    // Get the list of create dsp files names from the cmVCProjWriter, more
-    // than one dsp could have been created per input CMakeLists.txt file
-    // for each target
-    cmTargets &tgts = pg->GetMakefile()->GetTargets();
-    cmTargets::iterator l = tgts.begin();
-    std::string dir = mf->GetStartDirectory();
-    for(; l != tgts.end(); ++l)
-      {
-      if(strncmp(l->first.c_str(), "INCLUDE_EXTERNAL_MSPROJECT", 26) == 0)
-        {
-        cmCustomCommand cc = l->second.GetPostBuildCommands()[0];
-        const cmCustomCommandLines& cmds = cc.GetCommandLines();
-        std::string name = cmds[0][0];
-        this->WriteProjectConfigurations(fout, name.c_str(),
-                                         true);
-        }
-      else
-        {    
-        bool partOfDefaultBuild = this->IsPartOfDefaultBuild(
-          root->GetMakefile()->GetProjectName(),
-          &l->second);
-        const char *dspname = 
-          l->second.GetProperty("GENERATOR_FILE_NAME");
-        if (dspname)
-          {
-          this->WriteProjectConfigurations(fout, dspname,
-                                           partOfDefaultBuild);
-          }
-        }
-      }
-    }
-  fout << "\tEndGlobalSection\n";
-
-  // Write the footer for the SLN file
-  this->WriteSLNFooter(fout);
+  }
 }
 
-//----------------------------------------------------------------------------
-std::string
-cmGlobalVisualStudio7Generator::ConvertToSolutionPath(const char* path)
+void cmGlobalVisualStudio7Generator::WriteTargetsToSolution(
+  std::ostream& fout, cmLocalGenerator* root,
+  OrderedTargetDependSet const& projectTargets)
+{
+  VisualStudioFolders.clear();
+
+  for (cmGeneratorTarget const* target : projectTargets) {
+    if (!target->IsInBuildSystem()) {
+      continue;
+    }
+    bool written = false;
+
+    // handle external vc project files
+    cmValue expath = target->GetProperty("EXTERNAL_MSPROJECT");
+    if (expath) {
+      std::string project = target->GetName();
+      std::string location = *expath;
+
+      this->WriteExternalProject(fout, project, location,
+                                 target->GetProperty("VS_PROJECT_TYPE"),
+                                 target->GetUtilities());
+      written = true;
+    } else {
+      cmValue vcprojName = target->GetProperty("GENERATOR_FILE_NAME");
+      if (vcprojName) {
+        cmLocalGenerator* lg = target->GetLocalGenerator();
+        std::string dir = lg->GetCurrentBinaryDirectory();
+        dir = root->MaybeRelativeToCurBinDir(dir);
+        if (dir == ".") {
+          dir.clear(); // msbuild cannot handle ".\" prefix
+        }
+        this->WriteProject(fout, *vcprojName, dir, target);
+        written = true;
+      }
+    }
+
+    // Create "solution folder" information from FOLDER target property
+    //
+    if (written && this->UseFolderProperty()) {
+      const std::string targetFolder = target->GetEffectiveFolderName();
+      if (!targetFolder.empty()) {
+        std::vector<std::string> tokens =
+          cmSystemTools::SplitString(targetFolder, '/', false);
+
+        std::string cumulativePath;
+
+        for (std::string const& iter : tokens) {
+          if (!iter.size()) {
+            continue;
+          }
+
+          if (cumulativePath.empty()) {
+            cumulativePath = "CMAKE_FOLDER_GUID_" + iter;
+          } else {
+            VisualStudioFolders[cumulativePath].insert(cumulativePath + "/" +
+                                                       iter);
+
+            cumulativePath = cumulativePath + "/" + iter;
+          }
+        }
+
+        if (!cumulativePath.empty()) {
+          VisualStudioFolders[cumulativePath].insert(target->GetName());
+        }
+      }
+    }
+  }
+}
+
+void cmGlobalVisualStudio7Generator::WriteTargetDepends(
+  std::ostream& fout, OrderedTargetDependSet const& projectTargets)
+{
+  for (cmGeneratorTarget const* target : projectTargets) {
+    if (!target->IsInBuildSystem()) {
+      continue;
+    }
+    cmValue vcprojName = target->GetProperty("GENERATOR_FILE_NAME");
+    if (vcprojName) {
+      std::string dir =
+        target->GetLocalGenerator()->GetCurrentSourceDirectory();
+      this->WriteProjectDepends(fout, *vcprojName, dir, target);
+    }
+  }
+}
+
+void cmGlobalVisualStudio7Generator::WriteFolders(std::ostream& fout)
+{
+  cm::string_view const prefix = "CMAKE_FOLDER_GUID_";
+  std::string guidProjectTypeFolder = "2150E333-8FDC-42A3-9474-1A3956D46DE8";
+  for (auto const& iter : VisualStudioFolders) {
+    std::string fullName = iter.first;
+    std::string guid = this->GetGUID(fullName);
+
+    std::replace(fullName.begin(), fullName.end(), '/', '\\');
+    if (cmHasPrefix(fullName, prefix)) {
+      fullName = fullName.substr(prefix.size());
+    }
+
+    std::string nameOnly = cmSystemTools::GetFilenameName(fullName);
+
+    fout << "Project(\"{" << guidProjectTypeFolder << "}\") = \"" << nameOnly
+         << "\", \"" << fullName << "\", \"{" << guid << "}\"\nEndProject\n";
+  }
+}
+
+void cmGlobalVisualStudio7Generator::WriteFoldersContent(std::ostream& fout)
+{
+  for (auto const& iter : VisualStudioFolders) {
+    std::string key(iter.first);
+    std::string guidParent(this->GetGUID(key));
+
+    for (std::string const& it : iter.second) {
+      std::string value(it);
+      std::string guid(this->GetGUID(value));
+
+      fout << "\t\t{" << guid << "} = {" << guidParent << "}\n";
+    }
+  }
+}
+
+std::string cmGlobalVisualStudio7Generator::ConvertToSolutionPath(
+  const std::string& path)
 {
   // Convert to backslashes.  Do not use ConvertToOutputPath because
   // we will add quoting ourselves, and we know these projects always
   // use windows slashes.
   std::string d = path;
   std::string::size_type pos = 0;
-  while((pos = d.find('/', pos)) != d.npos)
-    {
+  while ((pos = d.find('/', pos)) != d.npos) {
     d[pos++] = '\\';
-    }
+  }
   return d;
 }
 
-// Write a dsp file into the SLN file,
-// Note, that dependencies from executables to 
-// the libraries it uses are also done here
-void cmGlobalVisualStudio7Generator::WriteProject(std::ostream& fout, 
-                               const char* dspname,
-                               const char* dir, cmTarget&)
+void cmGlobalVisualStudio7Generator::WriteSLNGlobalSections(
+  std::ostream& fout, cmLocalGenerator* root)
 {
-  fout << "Project(\"{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}\") = \"" 
-       << dspname << "\", \""
-       << this->ConvertToSolutionPath(dir)
-       << "\\" << dspname << ".vcproj\", \"{"
-       << this->GetGUID(dspname) << "}\"\nEndProject\n";
-}
-
-
-
-// Write a dsp file into the SLN file,
-// Note, that dependencies from executables to 
-// the libraries it uses are also done here
-void
-cmGlobalVisualStudio7Generator
-::WriteProjectDepends(std::ostream& fout,
-                      const char* dspname,
-                      const char*, cmTarget& target)
-{
-  int depcount = 0;
-  // insert Begin Project Dependency  Project_Dep_Name project stuff here 
-  if (target.GetType() != cmTarget::STATIC_LIBRARY)
-    {
-    cmTarget::LinkLibraryVectorType::const_iterator j, jend;
-    j = target.GetLinkLibraries().begin();
-    jend = target.GetLinkLibraries().end();
-    for(;j!= jend; ++j)
-      {
-      if(j->first != dspname)
-        {
-        // is the library part of this SLN ? If so add dependency
-        if(this->FindTarget(this->CurrentProject.c_str(), 
-                            j->first.c_str(), false))
-          {
-          std::string guid = this->GetGUID(j->first.c_str());
-          if(guid.size() == 0)
-            {
-            std::string m = "Target: ";
-            m += dspname;
-            m += " depends on unknown target: ";
-            m += j->first.c_str();
-            cmSystemTools::Error(m.c_str());
+  std::string const guid = this->GetGUID(root->GetProjectName() + ".sln");
+  bool extensibilityGlobalsOverridden = false;
+  bool extensibilityAddInsOverridden = false;
+  const std::vector<std::string> propKeys =
+    root->GetMakefile()->GetPropertyKeys();
+  for (std::string const& it : propKeys) {
+    if (cmHasLiteralPrefix(it, "VS_GLOBAL_SECTION_")) {
+      std::string sectionType;
+      std::string name = it.substr(18);
+      if (cmHasLiteralPrefix(name, "PRE_")) {
+        name = name.substr(4);
+        sectionType = "preSolution";
+      } else if (cmHasLiteralPrefix(name, "POST_")) {
+        name = name.substr(5);
+        sectionType = "postSolution";
+      } else
+        continue;
+      if (!name.empty()) {
+        bool addGuid = false;
+        if (name == "ExtensibilityGlobals" && sectionType == "postSolution") {
+          addGuid = true;
+          extensibilityGlobalsOverridden = true;
+        } else if (name == "ExtensibilityAddIns" &&
+                   sectionType == "postSolution") {
+          extensibilityAddInsOverridden = true;
+        }
+        fout << "\tGlobalSection(" << name << ") = " << sectionType << "\n";
+        cmValue p = root->GetMakefile()->GetProperty(it);
+        std::vector<std::string> keyValuePairs = cmExpandedList(p ? *p : "");
+        for (std::string const& itPair : keyValuePairs) {
+          const std::string::size_type posEqual = itPair.find('=');
+          if (posEqual != std::string::npos) {
+            const std::string key =
+              cmTrimWhitespace(itPair.substr(0, posEqual));
+            const std::string value =
+              cmTrimWhitespace(itPair.substr(posEqual + 1));
+            fout << "\t\t" << key << " = " << value << "\n";
+            if (key == "SolutionGuid") {
+              addGuid = false;
             }
-          fout << "\t\t{" << this->GetGUID(dspname) << "}."
-               << depcount << " = {" << guid << "}\n";
-          depcount++;
           }
         }
-      }
-    }
-
-  std::set<cmStdString>::const_iterator i, end;
-  // write utility dependencies.
-  i = target.GetUtilities().begin();
-  end = target.GetUtilities().end();
-  for(;i!= end; ++i)
-    {
-    if(*i != dspname)
-      {
-      std::string name = this->GetUtilityForTarget(target, i->c_str());
-      std::string guid = this->GetGUID(name.c_str());
-      if(guid.size() == 0)
-        {
-        std::string m = "Target: ";
-        m += dspname;
-        m += " depends on unknown target: ";
-        m += name.c_str();
-        cmSystemTools::Error(m.c_str());
+        if (addGuid) {
+          fout << "\t\tSolutionGuid = {" << guid << "}\n";
         }
-          
-      fout << "\t\t{" << this->GetGUID(dspname) << "}." << depcount << " = {"
-           << guid << "}\n";
-      depcount++;
+        fout << "\tEndGlobalSection\n";
       }
     }
+  }
+  if (!extensibilityGlobalsOverridden) {
+    fout << "\tGlobalSection(ExtensibilityGlobals) = postSolution\n"
+         << "\t\tSolutionGuid = {" << guid << "}\n"
+         << "\tEndGlobalSection\n";
+  }
+  if (!extensibilityAddInsOverridden)
+    fout << "\tGlobalSection(ExtensibilityAddIns) = postSolution\n"
+         << "\tEndGlobalSection\n";
 }
-
-
-// Write a dsp file into the SLN file, Note, that dependencies from
-// executables to the libraries it uses are also done here
-void cmGlobalVisualStudio7Generator
-::WriteProjectConfigurations(std::ostream& fout, const char* name,
-                             bool partOfDefaultBuild)
-{
-  std::string guid = this->GetGUID(name);
-  for(std::vector<std::string>::iterator i = this->Configurations.begin();
-      i != this->Configurations.end(); ++i)
-    {
-    fout << "\t\t{" << guid << "}." << *i
-         << ".ActiveCfg = " << *i << "|Win32\n";
-    if(partOfDefaultBuild)
-      {
-      fout << "\t\t{" << guid << "}." << *i
-           << ".Build.0 = " << *i << "|Win32\n";
-      }
-    }
-}
-
-
-
-// Write a dsp file into the SLN file,
-// Note, that dependencies from executables to 
-// the libraries it uses are also done here
-void cmGlobalVisualStudio7Generator::WriteExternalProject(std::ostream& fout, 
-                               const char* name,
-                               const char* location,
-                               const std::vector<std::string>&)
-{ 
-  std::string d = cmSystemTools::ConvertToOutputPath(location);
-  fout << "Project(\"{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}\") = \"" 
-       << name << "\", \""
-       << this->ConvertToSolutionPath(location) << "\", \"{"
-       << this->GetGUID(name)
-       << "}\"\n";
-  fout << "EndProject\n";
-}
-
-
 
 // Standard end of dsw file
 void cmGlobalVisualStudio7Generator::WriteSLNFooter(std::ostream& fout)
 {
-  fout << "\tGlobalSection(ExtensibilityGlobals) = postSolution\n"
-       << "\tEndGlobalSection\n"
-       << "\tGlobalSection(ExtensibilityAddIns) = postSolution\n"
-       << "\tEndGlobalSection\n"
-       << "EndGlobal\n";
+  fout << "EndGlobal\n";
 }
 
-  
-// ouput standard header for dsw file
-void cmGlobalVisualStudio7Generator::WriteSLNHeader(std::ostream& fout)
+std::string cmGlobalVisualStudio7Generator::WriteUtilityDepend(
+  cmGeneratorTarget const* target)
 {
-  fout << "Microsoft Visual Studio Solution File, Format Version 7.00\n";
+  std::vector<std::string> configs =
+    target->Target->GetMakefile()->GetGeneratorConfigs(
+      cmMakefile::ExcludeEmptyConfig);
+  std::string pname = cmStrCat(target->GetName(), "_UTILITY");
+  std::string fname =
+    cmStrCat(target->GetLocalGenerator()->GetCurrentBinaryDirectory(), '/',
+             pname, ".vcproj");
+  cmGeneratedFileStream fout(fname.c_str());
+  fout.SetCopyIfDifferent(true);
+  std::string guid = this->GetGUID(pname.c_str());
+
+  /* clang-format off */
+  fout <<
+    "<?xml version=\"1.0\" encoding = \""
+    << this->Encoding() << "\"?>\n"
+    "<VisualStudioProject\n"
+    "\tProjectType=\"Visual C++\"\n"
+    "\tVersion=\"" << this->GetIDEVersion() << "0\"\n"
+    "\tName=\"" << pname << "\"\n"
+    "\tProjectGUID=\"{" << guid << "}\"\n"
+    "\tKeyword=\"Win32Proj\">\n"
+    "\t<Platforms><Platform Name=\"Win32\"/></Platforms>\n"
+    "\t<Configurations>\n"
+    ;
+  /* clang-format on */
+  for (std::string const& i : configs) {
+    /* clang-format off */
+    fout <<
+      "\t\t<Configuration\n"
+      "\t\t\tName=\"" << i << "|Win32\"\n"
+      "\t\t\tOutputDirectory=\"" << i << "\"\n"
+      "\t\t\tIntermediateDirectory=\"" << pname << ".dir\\" << i << "\"\n"
+      "\t\t\tConfigurationType=\"10\"\n"
+      "\t\t\tUseOfMFC=\"0\"\n"
+      "\t\t\tATLMinimizesCRunTimeLibraryUsage=\"FALSE\"\n"
+      "\t\t\tCharacterSet=\"2\">\n"
+      "\t\t</Configuration>\n"
+      ;
+    /* clang-format on */
+  }
+  /* clang-format off */
+  fout <<
+    "\t</Configurations>\n"
+    "\t<Files></Files>\n"
+    "\t<Globals></Globals>\n"
+    "</VisualStudioProject>\n"
+    ;
+  /* clang-format on */
+
+  if (fout.Close()) {
+    this->FileReplacedDuringGenerate(fname);
+  }
+  return pname;
 }
 
-std::string cmGlobalVisualStudio7Generator::GetGUID(const char* name)
+std::string cmGlobalVisualStudio7Generator::GetGUID(std::string const& name)
 {
-  std::string guidStoreName = name;
-  guidStoreName += "_GUID_CMAKE";
-  const char* storedGUID = 
-    this->CMakeInstance->GetCacheDefinition(guidStoreName.c_str());
-  if(storedGUID)
-    {
-    return std::string(storedGUID);
-    }
-  cmSystemTools::Error("Unknown Target referenced : ",
-                       name);
-  return "";
+  std::string const& guidStoreName = name + "_GUID_CMAKE";
+  if (cmValue storedGUID =
+        this->CMakeInstance->GetCacheDefinition(guidStoreName)) {
+    return *storedGUID;
+  }
+  // Compute a GUID that is deterministic but unique to the build tree.
+  std::string input =
+    cmStrCat(this->CMakeInstance->GetState()->GetBinaryDirectory(), '|', name);
+
+  cmUuid uuidGenerator;
+
+  std::vector<unsigned char> uuidNamespace;
+  uuidGenerator.StringToBinary("ee30c4be-5192-4fb0-b335-722a2dffe760",
+                               uuidNamespace);
+
+  std::string guid = uuidGenerator.FromMd5(uuidNamespace, input);
+
+  return cmSystemTools::UpperCase(guid);
 }
 
-
-void cmGlobalVisualStudio7Generator::CreateGUID(const char* name)
+void cmGlobalVisualStudio7Generator::AppendDirectoryForConfig(
+  const std::string& prefix, const std::string& config,
+  const std::string& suffix, std::string& dir)
 {
-  std::string guidStoreName = name;
-  guidStoreName += "_GUID_CMAKE";
-  if(this->CMakeInstance->GetCacheDefinition(guidStoreName.c_str()))
-    {
-    return;
-    }
-  std::string ret;
-  UUID uid;
-  unsigned char *uidstr;
-  UuidCreate(&uid);
-  UuidToString(&uid,&uidstr);
-  ret = reinterpret_cast<char*>(uidstr);
-  RpcStringFree(&uidstr);
-  ret = cmSystemTools::UpperCase(ret);
-  this->CMakeInstance->AddCacheEntry(guidStoreName.c_str(), 
-                                     ret.c_str(), "Stored GUID", 
-                                     cmCacheManager::INTERNAL);
-}
-
-std::vector<std::string> *cmGlobalVisualStudio7Generator::GetConfigurations()
-{
-  return &this->Configurations;
-};
-
-//----------------------------------------------------------------------------
-void cmGlobalVisualStudio7Generator
-::GetDocumentation(cmDocumentationEntry& entry) const
-{
-  entry.Name = this->GetName();
-  entry.Brief = "Generates Visual Studio .NET 2002 project files.";
-  entry.Full = "";
-}
-
-// make sure "special" targets have GUID's
-void cmGlobalVisualStudio7Generator::Configure()
-{
-  cmGlobalGenerator::Configure();
-  this->CreateGUID("ALL_BUILD");
-  this->CreateGUID("INSTALL");
-  this->CreateGUID("RUN_TESTS");
-  this->CreateGUID("EDIT_CACHE");
-  this->CreateGUID("REBUILD_CACHE");
-  this->CreateGUID("PACKAGE");
-}
-
-//----------------------------------------------------------------------------
-void
-cmGlobalVisualStudio7Generator
-::AppendDirectoryForConfig(const char* prefix,
-                           const char* config,
-                           const char* suffix,
-                           std::string& dir)
-{
-  if(config)
-    {
+  if (!config.empty()) {
     dir += prefix;
     dir += config;
     dir += suffix;
-    }
+  }
 }
 
-bool cmGlobalVisualStudio7Generator::IsPartOfDefaultBuild(const char* project,
-                                                          cmTarget* target)
+std::set<std::string> cmGlobalVisualStudio7Generator::IsPartOfDefaultBuild(
+  std::vector<std::string> const& configs,
+  OrderedTargetDependSet const& projectTargets,
+  cmGeneratorTarget const* target)
 {
-  if(target->GetPropertyAsBool("EXCLUDE_FROM_DEFAULT_BUILD"))
-    {
-    return false;
-    }
-  // if it is a utilitiy target then only make it part of the 
+  std::set<std::string> activeConfigs;
+  // if it is a utilitiy target then only make it part of the
   // default build if another target depends on it
   int type = target->GetType();
-  if (type == cmTarget::GLOBAL_TARGET)
-    {
-    return false;
+  if (type == cmStateEnums::GLOBAL_TARGET) {
+    std::vector<std::string> targetNames;
+    targetNames.push_back("INSTALL");
+    targetNames.push_back("PACKAGE");
+    for (std::string const& t : targetNames) {
+      // check if target <t> is part of default build
+      if (target->GetName() == t) {
+        const std::string propertyName =
+          "CMAKE_VS_INCLUDE_" + t + "_TO_DEFAULT_BUILD";
+        // inspect CMAKE_VS_INCLUDE_<t>_TO_DEFAULT_BUILD properties
+        for (std::string const& i : configs) {
+          cmValue propertyValue =
+            target->Target->GetMakefile()->GetDefinition(propertyName);
+          if (propertyValue &&
+              cmIsOn(cmGeneratorExpression::Evaluate(
+                *propertyValue, target->GetLocalGenerator(), i))) {
+            activeConfigs.insert(i);
+          }
+        }
+      }
     }
-  if(type == cmTarget::UTILITY)
-    {
-    return this->IsDependedOn(project, target);
-    } 
-  // default is to be part of the build
-  return true;
+    return activeConfigs;
+  }
+  if (type == cmStateEnums::UTILITY &&
+      !this->IsDependedOn(projectTargets, target)) {
+    return activeConfigs;
+  }
+  // inspect EXCLUDE_FROM_DEFAULT_BUILD[_<CONFIG>] properties
+  for (std::string const& i : configs) {
+    if (cmIsOff(target->GetFeature("EXCLUDE_FROM_DEFAULT_BUILD", i))) {
+      activeConfigs.insert(i);
+    }
+  }
+  return activeConfigs;
 }
 
-//----------------------------------------------------------------------------
-static cmVS7FlagTable cmVS7ExtraFlagTable[] =
+bool cmGlobalVisualStudio7Generator::IsDependedOn(
+  OrderedTargetDependSet const& projectTargets, cmGeneratorTarget const* gtIn)
 {
-  // Precompiled header and related options.  Note that the
-  // UsePrecompiledHeader entries are marked as "Continue" so that the
-  // corresponding PrecompiledHeaderThrough entry can be found.
-  {"UsePrecompiledHeader", "YX", "Automatically Generate", "2",
-   cmVS7FlagTable::UserValueIgnored | cmVS7FlagTable::Continue},
-  {"PrecompiledHeaderThrough", "YX", "Precompiled Header Name", "",
-   cmVS7FlagTable::UserValueRequired},
-  {"UsePrecompiledHeader", "Yu", "Use Precompiled Header", "3",
-   cmVS7FlagTable::UserValueIgnored | cmVS7FlagTable::Continue},
-  {"PrecompiledHeaderThrough", "Yu", "Precompiled Header Name", "",
-   cmVS7FlagTable::UserValueRequired},
+  for (cmTargetDepend const& l : projectTargets) {
+    TargetDependSet const& tgtdeps = this->GetTargetDirectDepends(l);
+    if (tgtdeps.count(gtIn)) {
+      return true;
+    }
+  }
+  return false;
+}
 
-  // Exception handling mode.  If no entries match, it will be FALSE.
-  {"ExceptionHandling", "GX", "enable c++ exceptions", "TRUE", 0},
-  {"ExceptionHandling", "EHsc", "enable c++ exceptions", "TRUE", 0},
-  // The EHa option does not have an IDE setting.  Let it go to false,
-  // and have EHa passed on the command line by leaving out the table
-  // entry.
-
-  {0,0,0,0,0}
-};
-cmVS7FlagTable const* cmGlobalVisualStudio7Generator::GetExtraFlagTableVS7()
+std::string cmGlobalVisualStudio7Generator::Encoding()
 {
-  return cmVS7ExtraFlagTable;
+  return "UTF-8";
 }

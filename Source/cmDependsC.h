@@ -1,57 +1,49 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <iosfwd>
+#include <map>
+#include <queue>
+#include <set>
+#include <string>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmDependsC_h
-#define cmDependsC_h
+#include "cmsys/RegularExpression.hxx"
 
 #include "cmDepends.h"
-#include <cmsys/RegularExpression.hxx>
-#include <queue>
+
+class cmLocalUnixMakefileGenerator3;
 
 /** \class cmDependsC
  * \brief Dependency scanner for C and C++ object files.
  */
-class cmDependsC: public cmDepends
+class cmDependsC : public cmDepends
 {
 public:
   /** Checking instances need to know the build directory name and the
       relative path from the build directory to the target file.  */
   cmDependsC();
-  cmDependsC(std::vector<std::string> const& includes,
-             const char* scanRegex, const char* complainRegex,
-             const cmStdString& cachFileName);
+  cmDependsC(cmLocalUnixMakefileGenerator3* lg, const std::string& targetDir,
+             const std::string& lang, const DependencyMap* validDeps);
 
   /** Virtual destructor to cleanup subclasses properly.  */
-  virtual ~cmDependsC();
+  ~cmDependsC() override;
+
+  cmDependsC(cmDependsC const&) = delete;
+  cmDependsC& operator=(cmDependsC const&) = delete;
 
 protected:
-  typedef std::vector<char> t_CharBuffer;
-
   // Implement writing/checking methods required by superclass.
-  virtual bool WriteDependencies(const char *src,
-                                 const char *file,
-                                 std::ostream& makeDepends,
-                                 std::ostream& internalDepends);
+  bool WriteDependencies(const std::set<std::string>& sources,
+                         const std::string& obj, std::ostream& makeDepends,
+                         std::ostream& internalDepends) override;
 
   // Method to scan a single file.
-  void Scan(std::istream& is, const char* directory,
-    const cmStdString& fullName);
-
-  // The include file search path.
-  std::vector<std::string> const* IncludePath;
+  void Scan(std::istream& is, const std::string& directory,
+            const std::string& fullName);
 
   // Regular expression to identify C preprocessor include directives.
   cmsys::RegularExpression IncludeRegexLine;
@@ -60,39 +52,43 @@ protected:
   // recursively and which to complain about not finding.
   cmsys::RegularExpression IncludeRegexScan;
   cmsys::RegularExpression IncludeRegexComplain;
-  const std::string IncludeRegexLineString;
-  const std::string IncludeRegexScanString;
-  const std::string IncludeRegexComplainString;
+  std::string IncludeRegexLineString;
+  std::string IncludeRegexScanString;
+  std::string IncludeRegexComplainString;
+
+  // Regex to transform #include lines.
+  std::string IncludeRegexTransformString;
+  cmsys::RegularExpression IncludeRegexTransform;
+  using TransformRulesType = std::map<std::string, std::string>;
+  TransformRulesType TransformRules;
+  void SetupTransforms();
+  void ParseTransform(std::string const& xform);
+  void TransformLine(std::string& line);
 
 public:
   // Data structures for dependency graph walk.
   struct UnscannedEntry
   {
-    cmStdString FileName;
-    cmStdString QuotedLocation;
+    std::string FileName;
+    std::string QuotedLocation;
   };
 
   struct cmIncludeLines
   {
-    cmIncludeLines(): Used(false) {}
     std::vector<UnscannedEntry> UnscannedEntries;
-    bool Used;
+    bool Used = false;
   };
+
 protected:
-  std::set<cmStdString> Encountered;
+  const DependencyMap* ValidDeps = nullptr;
+  std::set<std::string> Encountered;
   std::queue<UnscannedEntry> Unscanned;
-  t_CharBuffer Buffer;
 
-  std::map<cmStdString, cmIncludeLines *> FileCache;
-  std::map<cmStdString, cmStdString> HeaderLocationCache;
+  std::map<std::string, cmIncludeLines> FileCache;
+  std::map<std::string, std::string> HeaderLocationCache;
 
-  cmStdString CacheFileName;
+  std::string CacheFileName;
 
   void WriteCacheFile() const;
   void ReadCacheFile();
-private:
-  cmDependsC(cmDependsC const&); // Purposely not implemented.
-  void operator=(cmDependsC const&); // Purposely not implemented.
 };
-
-#endif

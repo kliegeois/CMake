@@ -1,40 +1,22 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCTestReadCustomFilesCommand.h"
 
 #include "cmCTest.h"
 
+class cmExecutionStatus;
+
 bool cmCTestReadCustomFilesCommand::InitialPass(
-  std::vector<std::string> const& args)
+  std::vector<std::string> const& args, cmExecutionStatus& /*unused*/)
 {
-  if (args.size() < 1)
-    {
+  if (args.empty()) {
     this->SetError("called with incorrect number of arguments");
     return false;
-    }
+  }
 
-  std::vector<std::string>::const_iterator dit;
-  for ( dit = args.begin(); dit != args.end(); ++ dit )
-    {
-    this->CTest->ReadCustomConfigurationFileTree(dit->c_str(),
-      this->Makefile);
-    }
+  for (std::string const& arg : args) {
+    this->CTest->ReadCustomConfigurationFileTree(arg, this->Makefile);
+  }
 
   return true;
 }
-
-

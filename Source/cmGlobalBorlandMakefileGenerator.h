@@ -1,21 +1,9 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef cmGlobalBorlandMakefileGenerator_h
-#define cmGlobalBorlandMakefileGenerator_h
+#include <iosfwd>
+#include <memory>
 
 #include "cmGlobalNMakeMakefileGenerator.h"
 
@@ -24,30 +12,48 @@
  *
  * cmGlobalBorlandMakefileGenerator manages nmake build process for a tree
  */
-class cmGlobalBorlandMakefileGenerator : public cmGlobalNMakeMakefileGenerator
+class cmGlobalBorlandMakefileGenerator : public cmGlobalUnixMakefileGenerator3
 {
 public:
-  cmGlobalBorlandMakefileGenerator();
-  static cmGlobalGenerator* New() 
-    { return new cmGlobalBorlandMakefileGenerator; }
-  
-  ///! Get the name for the generator.
-  virtual const char* GetName() const {
-    return cmGlobalBorlandMakefileGenerator::GetActualName();}
-  static const char* GetActualName() {return "Borland Makefiles";}
+  cmGlobalBorlandMakefileGenerator(cmake* cm);
+  static std::unique_ptr<cmGlobalGeneratorFactory> NewFactory()
+  {
+    return std::unique_ptr<cmGlobalGeneratorFactory>(
+      new cmGlobalGeneratorSimpleFactory<cmGlobalBorlandMakefileGenerator>());
+  }
+
+  //! Get the name for the generator.
+  std::string GetName() const override
+  {
+    return cmGlobalBorlandMakefileGenerator::GetActualName();
+  }
+  static std::string GetActualName() { return "Borland Makefiles"; }
 
   /** Get the documentation entry for this generator.  */
-  virtual void GetDocumentation(cmDocumentationEntry& entry) const;
-  
-  ///! Create a local generator appropriate to this Global Generator
-  virtual cmLocalGenerator *CreateLocalGenerator();
+  static void GetDocumentation(cmDocumentationEntry& entry);
+
+  //! Create a local generator appropriate to this Global Generator
+  std::unique_ptr<cmLocalGenerator> CreateLocalGenerator(
+    cmMakefile* mf) override;
 
   /**
-   * Try to determine system infomation such as shared library
-   * extension, pthreads, byte order etc.  
+   * Try to determine system information such as shared library
+   * extension, pthreads, byte order etc.
    */
-  virtual void EnableLanguage(std::vector<std::string>const& languages,
-                              cmMakefile *, bool optional);
-};
+  void EnableLanguage(std::vector<std::string> const& languages, cmMakefile*,
+                      bool optional) override;
 
-#endif
+  bool AllowNotParallel() const override { return false; }
+  bool AllowDeleteOnError() const override { return false; }
+  bool CanEscapeOctothorpe() const override { return true; }
+
+protected:
+  std::vector<GeneratedMakeCommand> GenerateBuildCommand(
+    const std::string& makeProgram, const std::string& projectName,
+    const std::string& projectDir, std::vector<std::string> const& targetNames,
+    const std::string& config, bool fast, int jobs, bool verbose,
+    std::vector<std::string> const& makeOptions =
+      std::vector<std::string>()) override;
+
+  void PrintBuildCommandAdvice(std::ostream& os, int jobs) const override;
+};

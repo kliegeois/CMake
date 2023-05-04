@@ -1,36 +1,16 @@
-/*=========================================================================
-
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmRemoveDefinitionsCommand.h"
 
-// cmRemoveDefinitionsCommand
-bool cmRemoveDefinitionsCommand
-::InitialPass(std::vector<std::string> const& args)
-{
-  // it is OK to have no arguments
-  if(args.size() < 1 )
-    {
-    return true;
-    }
+#include "cmExecutionStatus.h"
+#include "cmMakefile.h"
 
-  for(std::vector<std::string>::const_iterator i = args.begin();
-      i != args.end(); ++i)
-    {
-    this->Makefile->RemoveDefineFlag(i->c_str());
-    }
+bool cmRemoveDefinitionsCommand(std::vector<std::string> const& args,
+                                cmExecutionStatus& status)
+{
+  cmMakefile& mf = status.GetMakefile();
+  for (std::string const& i : args) {
+    mf.RemoveDefineFlag(i);
+  }
   return true;
 }
-

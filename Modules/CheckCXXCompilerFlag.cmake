@@ -1,21 +1,41 @@
-# - Check whether the CXX compiler supports a given flag.
-# CHECK_CXX_COMPILER_FLAG(FLAG VARIABLE)
-#
-#  FLAG - the compiler flag
-#  VARIABLE - variable to store the result
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-# Copyright (c) 2006, Alexander Neundorf, <neundorf@kde.org>
-#
-# Redistribution and use is allowed according to the terms of the BSD license.
-# For details see the accompanying COPYING-CMAKE-SCRIPTS file.
+#[=======================================================================[.rst:
+CheckCXXCompilerFlag
+------------------------
 
+Check whether the CXX compiler supports a given flag.
 
-INCLUDE(CheckCXXSourceCompiles)
+.. command:: check_cxx_compiler_flag
 
-MACRO (CHECK_CXX_COMPILER_FLAG _FLAG _RESULT)
-   SET(SAFE_CMAKE_REQUIRED_DEFINITIONS "${CMAKE_REQUIRED_DEFINITIONS}")
-   SET(CMAKE_REQUIRED_DEFINITIONS "${_FLAG}")
-   CHECK_CXX_SOURCE_COMPILES("int main() { return 0;}" ${_RESULT})
-   SET (CMAKE_REQUIRED_DEFINITIONS "${SAFE_CMAKE_REQUIRED_DEFINITIONS}")
-ENDMACRO (CHECK_CXX_COMPILER_FLAG)
+  .. code-block:: cmake
 
+    check_cxx_compiler_flag(<flag> <var>)
+
+  Check that the ``<flag>`` is accepted by the compiler without
+  a diagnostic.  Stores the result in an internal cache entry
+  named ``<var>``.
+
+This command temporarily sets the ``CMAKE_REQUIRED_DEFINITIONS`` variable
+and calls the ``check_cxx_source_compiles`` macro from the
+:module:`CheckCXXSourceCompiles` module.  See documentation of that
+module for a listing of variables that can otherwise modify the build.
+
+A positive result from this check indicates only that the compiler did not
+issue a diagnostic message when given the flag.  Whether the flag has any
+effect or even a specific one is beyond the scope of this module.
+
+.. note::
+  Since the :command:`try_compile` command forwards flags from variables
+  like :variable:`CMAKE_CXX_FLAGS <CMAKE_<LANG>_FLAGS>`, unknown flags
+  in such variables may cause a false negative for this check.
+#]=======================================================================]
+
+include_guard(GLOBAL)
+include(CheckCXXSourceCompiles)
+include(Internal/CheckCompilerFlag)
+
+macro (CHECK_CXX_COMPILER_FLAG _FLAG _RESULT)
+  cmake_check_compiler_flag(CXX "${_FLAG}" ${_RESULT})
+endmacro ()

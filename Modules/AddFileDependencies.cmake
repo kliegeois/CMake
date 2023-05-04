@@ -1,16 +1,33 @@
-# - ADD_FILE_DEPENDENCIES(source_file depend_files...)
-# Adds the given files as dependencies to source_file
-#
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-MACRO(ADD_FILE_DEPENDENCIES _file)
+#[=======================================================================[.rst:
+AddFileDependencies
+-------------------
 
-   GET_SOURCE_FILE_PROPERTY(_deps ${_file} OBJECT_DEPENDS)
-   IF (_deps)
-      SET(_deps ${_deps} ${ARGN})
-   ELSE (_deps)
-      SET(_deps ${ARGN})
-   ENDIF (_deps)
+.. deprecated:: 3.20
 
-   SET_SOURCE_FILES_PROPERTIES(${_file} PROPERTIES OBJECT_DEPENDS "${_deps}")
+Add dependencies to a source file.
 
-ENDMACRO(ADD_FILE_DEPENDENCIES)
+.. code-block:: cmake
+
+  add_file_dependencies(<source> <files>...)
+
+Adds the given ``<files>`` to the dependencies of file ``<source>``.
+
+Do not use this command in new code.  It is just a wrapper around:
+
+.. code-block:: cmake
+
+  set_property(SOURCE <source> APPEND PROPERTY OBJECT_DEPENDS <files>...)
+
+Instead use the :command:`set_property` command to append to the
+:prop_sf:`OBJECT_DEPENDS` source file property directly.
+
+#]=======================================================================]
+
+function(add_file_dependencies _file)
+
+  set_property(SOURCE "${_file}" APPEND PROPERTY OBJECT_DEPENDS "${ARGN}")
+
+endfunction()

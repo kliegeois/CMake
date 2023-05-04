@@ -1,60 +1,77 @@
-# - Check if the source code provided in the SOURCE argument compiles.
-# CHECK_C_SOURCE_COMPILES(SOURCE VAR)
-# - macro which checks if the source code compiles
-#  SOURCE   - source code to try to compile
-#  VAR      - variable to store whether the source code compiled
-#
-# The following variables may be set before calling this macro to
-# modify the way the check is run:
-#
-#  CMAKE_REQUIRED_FLAGS = string of compile command line flags
-#  CMAKE_REQUIRED_DEFINITIONS = list of macros to define (-DFOO=bar)
-#  CMAKE_REQUIRED_INCLUDES = list of include directories
-#  CMAKE_REQUIRED_LIBRARIES = list of libraries to link
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-MACRO(CHECK_C_SOURCE_COMPILES SOURCE VAR)
-  IF("${VAR}" MATCHES "^${VAR}$")
-    SET(MACRO_CHECK_FUNCTION_DEFINITIONS
-      "-D${VAR} ${CMAKE_REQUIRED_FLAGS}")
-    IF(CMAKE_REQUIRED_LIBRARIES)
-      SET(CHECK_C_SOURCE_COMPILES_ADD_LIBRARIES
-        "-DLINK_LIBRARIES:STRING=${CMAKE_REQUIRED_LIBRARIES}")
-    ELSE(CMAKE_REQUIRED_LIBRARIES)
-      SET(CHECK_C_SOURCE_COMPILES_ADD_LIBRARIES)
-    ENDIF(CMAKE_REQUIRED_LIBRARIES)
-    IF(CMAKE_REQUIRED_INCLUDES)
-      SET(CHECK_C_SOURCE_COMPILES_ADD_INCLUDES
-        "-DINCLUDE_DIRECTORIES:STRING=${CMAKE_REQUIRED_INCLUDES}")
-    ELSE(CMAKE_REQUIRED_INCLUDES)
-      SET(CHECK_C_SOURCE_COMPILES_ADD_INCLUDES)
-    ENDIF(CMAKE_REQUIRED_INCLUDES)
-    FILE(WRITE "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/src.c"
-      "${SOURCE}\n")
+#[=======================================================================[.rst:
+CheckCSourceCompiles
+--------------------
 
-    MESSAGE(STATUS "Performing Test ${VAR}")
-    TRY_COMPILE(${VAR}
-      ${CMAKE_BINARY_DIR}
-      ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/src.c
-      COMPILE_DEFINITIONS ${CMAKE_REQUIRED_DEFINITIONS}
-      CMAKE_FLAGS -DCOMPILE_DEFINITIONS:STRING=${MACRO_CHECK_FUNCTION_DEFINITIONS}
-      "${CHECK_C_SOURCE_COMPILES_ADD_LIBRARIES}"
-      "${CHECK_C_SOURCE_COMPILES_ADD_INCLUDES}"
-      OUTPUT_VARIABLE OUTPUT)
-    IF(${VAR})
-      SET(${VAR} 1 CACHE INTERNAL "Test ${VAR}")
-      MESSAGE(STATUS "Performing Test ${VAR} - Success")
-      FILE(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-        "Performing C SOURCE FILE Test ${VAR} succeded with the following output:\n"
-        "${OUTPUT}\n"
-        "Source file was:\n${SOURCE}\n")
-    ELSE(${VAR})
-      MESSAGE(STATUS "Performing Test ${VAR} - Failed")
-      SET(${VAR} "" CACHE INTERNAL "Test ${VAR}")
-      FILE(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
-        "Performing C SOURCE FILE Test ${VAR} failed with the following output:\n"
-        "${OUTPUT}\n"
-        "Source file was:\n${SOURCE}\n")
-    ENDIF(${VAR})
-  ENDIF("${VAR}" MATCHES "^${VAR}$")
-ENDMACRO(CHECK_C_SOURCE_COMPILES)
+Check if given C source compiles and links into an executable.
 
+.. command:: check_c_source_compiles
+
+  .. code-block:: cmake
+
+    check_c_source_compiles(<code> <resultVar>
+                            [FAIL_REGEX <regex1> [<regex2>...]])
+
+  Check that the source supplied in ``<code>`` can be compiled as a C source
+  file and linked as an executable (so it must contain at least a ``main()``
+  function). The result will be stored in the internal cache variable specified
+  by ``<resultVar>``, with a boolean true value for success and boolean false
+  for failure. If ``FAIL_REGEX`` is provided, then failure is determined by
+  checking if anything in the output matches any of the specified regular
+  expressions.
+
+  The underlying check is performed by the :command:`try_compile` command. The
+  compile and link commands can be influenced by setting any of the following
+  variables prior to calling ``check_c_source_compiles()``:
+
+  ``CMAKE_REQUIRED_FLAGS``
+    Additional flags to pass to the compiler. Note that the contents of
+    :variable:`CMAKE_C_FLAGS <CMAKE_<LANG>_FLAGS>` and its associated
+    configuration-specific variable are automatically added to the compiler
+    command before the contents of ``CMAKE_REQUIRED_FLAGS``.
+
+  ``CMAKE_REQUIRED_DEFINITIONS``
+    A :ref:`;-list <CMake Language Lists>` of compiler definitions of the form
+    ``-DFOO`` or ``-DFOO=bar``. A definition for the name specified by
+    ``<resultVar>`` will also be added automatically.
+
+  ``CMAKE_REQUIRED_INCLUDES``
+    A :ref:`;-list <CMake Language Lists>` of header search paths to pass to
+    the compiler. These will be the only header search paths used by
+    ``try_compile()``, i.e. the contents of the :prop_dir:`INCLUDE_DIRECTORIES`
+    directory property will be ignored.
+
+  ``CMAKE_REQUIRED_LINK_OPTIONS``
+    .. versionadded:: 3.14
+
+    A :ref:`;-list <CMake Language Lists>` of options to add to the link
+    command (see :command:`try_compile` for further details).
+
+  ``CMAKE_REQUIRED_LIBRARIES``
+    A :ref:`;-list <CMake Language Lists>` of libraries to add to the link
+    command. These can be the name of system libraries or they can be
+    :ref:`Imported Targets <Imported Targets>` (see :command:`try_compile` for
+    further details).
+
+  ``CMAKE_REQUIRED_QUIET``
+    .. versionadded:: 3.1
+
+    If this variable evaluates to a boolean true value, all status messages
+    associated with the check will be suppressed.
+
+  The check is only performed once, with the result cached in the variable
+  named by ``<resultVar>``. Every subsequent CMake run will re-use this cached
+  value rather than performing the check again, even if the ``<code>`` changes.
+  In order to force the check to be re-evaluated, the variable named by
+  ``<resultVar>`` must be manually removed from the cache.
+
+#]=======================================================================]
+
+include_guard(GLOBAL)
+include(Internal/CheckSourceCompiles)
+
+macro(CHECK_C_SOURCE_COMPILES SOURCE VAR)
+  cmake_check_source_compiles(C "${SOURCE}" ${VAR} ${ARGN})
+endmacro()

@@ -1,109 +1,107 @@
-# - Use Module for QT4
-# Sets up C and C++ to use Qt 4.  It is assumed that FindQt.cmake
-# has already been loaded.  See FindQt.cmake for information on
-# how to load Qt 4 into your CMake project.
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
+#[=======================================================================[.rst:
+UseQt4
+------
 
-ADD_DEFINITIONS(${QT_DEFINITIONS})
+Use Module for QT4
 
-# check that QT_NO_DEBUG is defined for release configurations
-MACRO(QT_CHECK_FLAG_EXISTS FLAG VAR DOC)
-  IF(NOT ${VAR} MATCHES "${FLAG}")
-    SET(${VAR} "${${VAR}} ${FLAG}" 
-      CACHE STRING "Flags used by the compiler during ${DOC} builds." FORCE)
-  ENDIF(NOT ${VAR} MATCHES "${FLAG}")
-ENDMACRO(QT_CHECK_FLAG_EXISTS FLAG VAR)
-QT_CHECK_FLAG_EXISTS(-DQT_NO_DEBUG CMAKE_CXX_FLAGS_RELWITHDEBINFO "Release with Debug Info")
-QT_CHECK_FLAG_EXISTS(-DQT_NO_DEBUG CMAKE_CXX_FLAGS_RELEASE "release")
-QT_CHECK_FLAG_EXISTS(-DQT_NO_DEBUG CMAKE_CXX_FLAGS_MINSIZEREL "release minsize")
+Sets up C and C++ to use Qt 4.  It is assumed that :module:`FindQt` has
+already been loaded.  See :module:`FindQt` for information on how to load
+Qt 4 into your CMake project.
+#]=======================================================================]
 
-INCLUDE_DIRECTORIES(${QT_INCLUDE_DIR})
+add_definitions(${QT_DEFINITIONS})
+set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS $<$<NOT:$<CONFIG:Debug>>:QT_NO_DEBUG>)
 
-SET(QT_LIBRARIES "")
+if(QT_INCLUDE_DIRS_NO_SYSTEM)
+  include_directories(${QT_INCLUDE_DIR})
+else(QT_INCLUDE_DIRS_NO_SYSTEM)
+  include_directories(SYSTEM ${QT_INCLUDE_DIR})
+endif(QT_INCLUDE_DIRS_NO_SYSTEM)
 
-IF (QT_USE_QTMAIN)
-  IF (WIN32)
-    SET(QT_LIBRARIES ${QT_LIBRARIES} ${QT_QTMAIN_LIBRARY})
-  ENDIF (WIN32)
-ENDIF (QT_USE_QTMAIN)
+set(QT_LIBRARIES "")
+set(QT_LIBRARIES_PLUGINS "")
 
-# Macro for setting up compile flags for Qt modules
-MACRO(QT_MODULE_SETUP module)
-  IF (QT_QT${module}_FOUND)
-    ADD_DEFINITIONS(-DQT_${module}_LIB)
-    INCLUDE_DIRECTORIES(${QT_QT${module}_INCLUDE_DIR})
-    SET(QT_LIBRARIES ${QT_LIBRARIES} ${QT_QT${module}_LIBRARY} ${QT_${module}_LIB_DEPENDENCIES})
-  ELSE (QT_QT${module}_FOUND)
-    MESSAGE("Qt ${module} library not found.")
-  ENDIF (QT_QT${module}_FOUND)
-ENDMACRO(QT_MODULE_SETUP)
+if (QT_USE_QTMAIN)
+  if (Q_WS_WIN)
+    set(QT_LIBRARIES ${QT_LIBRARIES} ${QT_QTMAIN_LIBRARY})
+  endif ()
+endif ()
 
+if(QT_DONT_USE_QTGUI)
+  set(QT_USE_QTGUI 0)
+else()
+  set(QT_USE_QTGUI 1)
+endif()
+
+if(QT_DONT_USE_QTCORE)
+  set(QT_USE_QTCORE 0)
+else()
+  set(QT_USE_QTCORE 1)
+endif()
+
+if (QT_USE_QT3SUPPORT)
+  add_definitions(-DQT3_SUPPORT)
+endif ()
+
+# list dependent modules, so dependent libraries are added
+set(QT_QT3SUPPORT_MODULE_DEPENDS QTGUI QTSQL QTXML QTNETWORK QTCORE)
+set(QT_QTSVG_MODULE_DEPENDS QTGUI QTCORE)
+set(QT_QTUITOOLS_MODULE_DEPENDS QTGUI QTXML QTCORE)
+set(QT_QTHELP_MODULE_DEPENDS QTGUI QTSQL QTXML QTNETWORK QTCORE)
+if(QT_QTDBUS_FOUND)
+  set(QT_PHONON_MODULE_DEPENDS QTGUI QTDBUS QTCORE)
+else()
+  set(QT_PHONON_MODULE_DEPENDS QTGUI QTCORE)
+endif()
+set(QT_QTDBUS_MODULE_DEPENDS QTXML QTCORE)
+set(QT_QTXMLPATTERNS_MODULE_DEPENDS QTNETWORK QTCORE)
+set(QT_QAXCONTAINER_MODULE_DEPENDS QTGUI QTCORE)
+set(QT_QAXSERVER_MODULE_DEPENDS QTGUI QTCORE)
+set(QT_QTSCRIPTTOOLS_MODULE_DEPENDS QTGUI QTCORE)
+set(QT_QTWEBKIT_MODULE_DEPENDS QTXMLPATTERNS QTGUI QTCORE)
+set(QT_QTDECLARATIVE_MODULE_DEPENDS QTSCRIPT QTSVG QTSQL QTXMLPATTERNS QTGUI QTCORE)
+set(QT_QTMULTIMEDIA_MODULE_DEPENDS QTGUI QTCORE)
+set(QT_QTOPENGL_MODULE_DEPENDS QTGUI QTCORE)
+set(QT_QTSCRIPT_MODULE_DEPENDS QTCORE)
+set(QT_QTGUI_MODULE_DEPENDS QTCORE)
+set(QT_QTTEST_MODULE_DEPENDS QTCORE)
+set(QT_QTXML_MODULE_DEPENDS QTCORE)
+set(QT_QTSQL_MODULE_DEPENDS QTCORE)
+set(QT_QTNETWORK_MODULE_DEPENDS QTCORE)
 
 # Qt modules  (in order of dependence)
+foreach(module QT3SUPPORT QTOPENGL QTASSISTANT QTDESIGNER QTMOTIF QTNSPLUGIN
+               QAXSERVER QAXCONTAINER QTDECLARATIVE QTSCRIPT QTSVG QTUITOOLS QTHELP
+               QTWEBKIT PHONON QTSCRIPTTOOLS QTMULTIMEDIA QTXMLPATTERNS QTGUI QTTEST
+               QTDBUS QTXML QTSQL QTNETWORK QTCORE)
 
-IF (QT_USE_QT3SUPPORT)
-  QT_MODULE_SETUP(3SUPPORT)
-  ADD_DEFINITIONS(-DQT3_SUPPORT)
-ENDIF (QT_USE_QT3SUPPORT)
+  if (QT_USE_${module} OR QT_USE_${module}_DEPENDS)
+    if (QT_${module}_FOUND)
+      if(QT_USE_${module})
+        string(REPLACE "QT" "" qt_module_def "${module}")
+        add_definitions(-DQT_${qt_module_def}_LIB)
+        if(QT_INCLUDE_DIRS_NO_SYSTEM)
+          include_directories(${QT_${module}_INCLUDE_DIR})
+        else(QT_INCLUDE_DIRS_NO_SYSTEM)
+          include_directories(SYSTEM ${QT_${module}_INCLUDE_DIR})
+        endif(QT_INCLUDE_DIRS_NO_SYSTEM)
+      endif()
+      if(QT_USE_${module} OR QT_IS_STATIC)
+        set(QT_LIBRARIES ${QT_LIBRARIES} ${QT_${module}_LIBRARY})
+      endif()
+      set(QT_LIBRARIES_PLUGINS ${QT_LIBRARIES_PLUGINS} ${QT_${module}_PLUGINS})
+      if(QT_IS_STATIC)
+        set(QT_LIBRARIES ${QT_LIBRARIES} ${QT_${module}_LIB_DEPENDENCIES})
+      endif()
+      foreach(depend_module ${QT_${module}_MODULE_DEPENDS})
+        set(QT_USE_${depend_module}_DEPENDS 1)
+      endforeach()
+    else ()
+      message("Qt ${module} library not found.")
+    endif ()
+  endif ()
 
-IF (QT_USE_QTOPENGL)
-  QT_MODULE_SETUP(OPENGL)
-ENDIF (QT_USE_QTOPENGL)
-
-IF (QT_USE_QTASSISTANT)
-  QT_MODULE_SETUP(ASSISTANT)
-ENDIF (QT_USE_QTASSISTANT)
-
-IF (QT_USE_QTDESIGNER)
-  QT_MODULE_SETUP(DESIGNER)
-ENDIF (QT_USE_QTDESIGNER)
-
-IF (QT_USE_QTMOTIF)
-  QT_MODULE_SETUP(MOTIF)
-ENDIF (QT_USE_QTMOTIF)
-
-IF (QT_USE_QTNSPLUGIN)
-  QT_MODULE_SETUP(NSPLUGIN)
-ENDIF (QT_USE_QTNSPLUGIN)
-
-IF (QT_USE_QTSCRIPT)
-  QT_MODULE_SETUP(SCRIPT)
-ENDIF (QT_USE_QTSCRIPT)
-
-IF (QT_USE_QTSVG)
-  QT_MODULE_SETUP(SVG)
-ENDIF (QT_USE_QTSVG)
-
-IF (QT_USE_QTUITOOLS)
-  QT_MODULE_SETUP(UITOOLS)
-ENDIF (QT_USE_QTUITOOLS)
-
-IF (NOT QT_DONT_USE_QTGUI)
-  QT_MODULE_SETUP(GUI)
-ENDIF (NOT QT_DONT_USE_QTGUI)
-
-IF (QT_USE_QTTEST)
-  QT_MODULE_SETUP(TEST)
-ENDIF (QT_USE_QTTEST)
-
-IF (QT_USE_QTXML)
-  QT_MODULE_SETUP(XML)
-ENDIF (QT_USE_QTXML)
-
-IF (QT_USE_QTSQL)
-  QT_MODULE_SETUP(SQL)
-ENDIF (QT_USE_QTSQL)
-
-IF (QT_USE_QTNETWORK)
-  QT_MODULE_SETUP(NETWORK)
-ENDIF (QT_USE_QTNETWORK)
-
-IF (QT_USE_QTDBUS)
-  QT_MODULE_SETUP(DBUS)
-ENDIF (QT_USE_QTDBUS)
-
-IF (NOT QT_DONT_USE_QTCORE)
-  QT_MODULE_SETUP(CORE)
-ENDIF (NOT QT_DONT_USE_QTCORE)
-
-
+endforeach()

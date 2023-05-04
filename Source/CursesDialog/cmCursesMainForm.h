@@ -1,29 +1,23 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <cstddef>
+#include <memory>
+#include <string>
+#include <vector>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
+#include <cm/optional>
 
-=========================================================================*/
-#ifndef __cmCursesMainForm_h
-#define __cmCursesMainForm_h
-
-#include "../cmStandardIncludes.h"
+#include "cmCursesCacheEntryComposite.h"
 #include "cmCursesForm.h"
 #include "cmCursesStandardIncludes.h"
+#include "cmStateTypes.h"
 
-class cmCursesCacheEntryComposite;
-class cmCursesWidget;
 class cmake;
+class cmCursesLongMessageForm;
 
 /** \class cmCursesMainForm
  * \brief The main page of ccmake
@@ -33,32 +27,36 @@ class cmake;
 class cmCursesMainForm : public cmCursesForm
 {
 public:
-  cmCursesMainForm(std::vector<std::string> const& args, int initwidth);
-  virtual ~cmCursesMainForm();
-  
+  cmCursesMainForm(std::vector<std::string> args, int initwidth);
+  ~cmCursesMainForm() override;
+
+  cmCursesMainForm(cmCursesMainForm const&) = delete;
+  cmCursesMainForm& operator=(cmCursesMainForm const&) = delete;
+
   /**
    * Set the widgets which represent the cache entries.
    */
   void InitializeUI();
-  
+
   /**
    * Handle user input.
    */
-  virtual void HandleInput();
+  void HandleInput() override;
 
   /**
    * Display form. Use a window of size width x height, starting
    * at top, left.
    */
-  virtual void Render(int left, int top, int width, int height);
+  void Render(int left, int top, int width, int height) override;
 
   /**
    * Returns true if an entry with the given key is in the
    * list of current composites.
    */
-  bool LookForCacheEntry(const char* key);
+  bool LookForCacheEntry(const std::string& key);
 
-  enum {
+  enum
+  {
     MIN_WIDTH = 65,
     MIN_HEIGHT = 6,
     IDEAL_WIDTH = 80,
@@ -70,8 +68,8 @@ public:
    * exception is during a resize. The optional argument specifies the
    * string to be displayed in the status bar.
    */
-  virtual void UpdateStatusBar() { this->UpdateStatusBar(0); } 
-  virtual void UpdateStatusBar(const char* message);
+  void UpdateStatusBar() override { this->UpdateStatusBar(cm::nullopt); }
+  void UpdateStatusBar(cm::optional<std::string> message);
 
   /**
    * Display current commands and their keys on the toolbar.  This
@@ -86,40 +84,36 @@ public:
    * During a CMake run, an error handle should add errors
    * to be displayed afterwards.
    */
-  virtual void AddError(const char* message, const char* title);
+  void AddError(const std::string& message, const char* title) override;
 
   /**
    * Used to do a configure. If argument is specified, it does only the check
    * and not configure.
    */
-  int Configure(int noconfigure=0);
+  int Configure(int noconfigure = 0);
 
   /**
-   * Used to generate 
+   * Used to generate
    */
   int Generate();
 
   /**
    * Used by main program
    */
-  int LoadCache(const char *dir);
-  
+  int LoadCache(const char* dir);
+
   /**
    * Progress callback
    */
-  static void UpdateProgressOld(const char *msg, float prog, void*);
-  static void UpdateProgress(const char *msg, float prog, void*);
+  void UpdateProgress(const std::string& msg, float prog);
 
 protected:
-  cmCursesMainForm(const cmCursesMainForm& from);
-  void operator=(const cmCursesMainForm&);
-
   // Copy the cache values from the user interface to the actual
   // cache.
   void FillCacheManagerFromUI();
   // Fix formatting of values to a consistent form.
-  void FixValue(cmCacheManager::CacheEntryType type,
-                const std::string& in, std::string& out) const;
+  void FixValue(cmStateEnums::CacheEntryType type, const std::string& in,
+                std::string& out) const;
   // Re-post the existing fields. Used to toggle between
   // normal and advanced modes. Render() should be called
   // afterwards.
@@ -127,15 +121,28 @@ protected:
   // Remove an entry from the interface and the cache.
   void RemoveEntry(const char* value);
 
-  // Jump to the cache value with index idx. If string str is
-  // specified, it will stop on widget that contain that string.
-  void JumpToCacheEntry(int idx, const char* str);
+  // Jump to the cache entry whose name matches the string.
+  void JumpToCacheEntry(const char* str);
+
+  // Clear and reset the output log and state
+  void ResetOutputs();
+
+  // Display the current progress and output
+  void DisplayOutputs(std::string const& newOutput);
 
   // Copies of cache entries stored in the user interface
-  std::vector<cmCursesCacheEntryComposite*>* Entries;
-  // Errors produced during last run of cmake
-  std::vector<std::string> Errors;
-  // Command line argumens to be passed to cmake each time
+  std::vector<cmCursesCacheEntryComposite> Entries;
+
+  // The form used to display logs during processing
+  std::unique_ptr<cmCursesLongMessageForm> LogForm;
+  // Output produced by the last pass
+  std::vector<std::string> Outputs;
+  // Did the last pass produced outputs of interest (errors, warnings, ...)
+  bool HasNonStatusOutputs;
+  // Last progress bar
+  std::string LastProgress;
+
+  // Command line arguments to be passed to cmake each time
   // it is run
   std::vector<std::string> Args;
   // Message displayed when user presses 'h'
@@ -146,13 +153,9 @@ protected:
   static const char* s_ConstHelpMessage;
 
   // Fields displayed. Includes labels, new entry markers, entries
-  FIELD** Fields;
-  // Where is source of current project
-  std::string WhereSource;
-  // Where is cmake executable
-  std::string WhereCMake;
+  std::vector<FIELD*> Fields;
   // Number of entries shown (depends on mode -normal or advanced-)
-  int NumberOfVisibleEntries;
+  size_t NumberOfVisibleEntries;
   bool AdvancedMode;
   // Did the iteration converge (no new entries) ?
   bool OkToGenerate;
@@ -160,11 +163,9 @@ protected:
   int NumberOfPages;
 
   int InitialWidth;
-  cmake *CMakeInstance;
+  std::unique_ptr<cmake> CMakeInstance;
 
   std::string SearchString;
   std::string OldSearchString;
   bool SearchMode;
 };
-
-#endif // __cmCursesMainForm_h

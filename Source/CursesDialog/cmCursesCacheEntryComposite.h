@@ -1,47 +1,42 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
+#include "cmConfigure.h" // IWYU pragma: keep
 
-  Copyright (c) 2002 Kitware, Inc., Insight Consortium.  All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
+#include <memory>
+#include <string>
 
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-#ifndef __cmCursesCacheEntryComposite_h
-#define __cmCursesCacheEntryComposite_h
-
-#include "../cmCacheManager.h"
-#include "cmCursesLabelWidget.h"
+class cmCursesLabelWidget;
+class cmCursesWidget;
+class cmState;
 
 class cmCursesCacheEntryComposite
 {
 public:
-  cmCursesCacheEntryComposite(const char* key, int labelwidth, int entrywidth);
-  cmCursesCacheEntryComposite(const char* key,
-                              const cmCacheManager::CacheIterator& it, 
+  cmCursesCacheEntryComposite(const std::string& key, int labelwidth,
+                              int entrywidth);
+  cmCursesCacheEntryComposite(const std::string& key, cmState* state,
                               bool isNew, int labelwidth, int entrywidth);
   ~cmCursesCacheEntryComposite();
+
+  cmCursesCacheEntryComposite(cmCursesCacheEntryComposite const&) = delete;
+  cmCursesCacheEntryComposite& operator=(cmCursesCacheEntryComposite const&) =
+    delete;
+
+  cmCursesCacheEntryComposite(cmCursesCacheEntryComposite&&) = default;
+  cmCursesCacheEntryComposite& operator=(cmCursesCacheEntryComposite&&) =
+    default;
+
   const char* GetValue();
 
   friend class cmCursesMainForm;
 
 protected:
-  cmCursesCacheEntryComposite(const cmCursesCacheEntryComposite& from);
-  void operator=(const cmCursesCacheEntryComposite&);
-
-  cmCursesLabelWidget* Label;
-  cmCursesLabelWidget* IsNewLabel;
-  cmCursesWidget* Entry;
+  std::unique_ptr<cmCursesLabelWidget> Label;
+  std::unique_ptr<cmCursesLabelWidget> IsNewLabel;
+  std::unique_ptr<cmCursesWidget> Entry;
   std::string Key;
   int LabelWidth;
   int EntryWidth;
 };
-
-#endif // __cmCursesCacheEntryComposite_h

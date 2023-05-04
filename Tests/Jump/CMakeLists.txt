@@ -1,5 +1,6 @@
-PROJECT(Jump)
+cmake_minimum_required (VERSION 2.6)
+project(Jump)
 
-SET(CMAKE_IGNORE_DEPENDENCIES_ORDERING 1)
-ADD_SUBDIRECTORY(Executable)
-ADD_SUBDIRECTORY(Library)
+set(CMAKE_IGNORE_DEPENDENCIES_ORDERING 1)
+add_subdirectory(Executable)
+add_subdirectory(Library)

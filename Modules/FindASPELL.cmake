@@ -1,30 +1,32 @@
-# - Try to find ASPELL
-# Once done this will define
-#
-#  ASPELL_FOUND - system has ASPELL
-#  ASPELL_INCLUDE_DIR - the ASPELL include directory
-#  ASPELL_LIBRARIES - The libraries needed to use ASPELL
-#  ASPELL_DEFINITIONS - Compiler switches required for using ASPELL
+# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+# file Copyright.txt or https://cmake.org/licensing for details.
 
-# Copyright (c) 2006, Alexander Neundorf, <neundorf@kde.org>
-#
-# Redistribution and use is allowed according to the terms of the BSD license.
-# For details see the accompanying COPYING-CMAKE-SCRIPTS file.
+#[=======================================================================[.rst:
+FindASPELL
+----------
 
+Try to find ASPELL
 
-IF (ASPELL_INCLUDE_DIR AND ASPELL_LIBRARIES)
-  # Already in cache, be silent
-  SET(ASPELL_FIND_QUIETLY TRUE)
-ENDIF (ASPELL_INCLUDE_DIR AND ASPELL_LIBRARIES)
+Once done this will define
 
-FIND_PATH(ASPELL_INCLUDE_DIR aspell.h )
+::
 
-FIND_LIBRARY(ASPELL_LIBRARIES NAMES aspell aspell-15 libaspell-15 libaspell)
+  ASPELL_FOUND - system has ASPELL
+  ASPELL_EXECUTABLE - the ASPELL executable
+  ASPELL_INCLUDE_DIR - the ASPELL include directory
+  ASPELL_LIBRARIES - The libraries needed to use ASPELL
+  ASPELL_DEFINITIONS - Compiler switches required for using ASPELL
+#]=======================================================================]
 
-# handle the QUIETLY and REQUIRED arguments and set ASPELL_FOUND to TRUE if 
-# all listed variables are TRUE
-INCLUDE(FindPackageHandleStandardArgs)
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(ASPELL DEFAULT_MSG ASPELL_LIBRARIES ASPELL_INCLUDE_DIR)
+find_path(ASPELL_INCLUDE_DIR aspell.h )
 
+find_program(ASPELL_EXECUTABLE
+  NAMES aspell
+)
 
-MARK_AS_ADVANCED(ASPELL_INCLUDE_DIR ASPELL_LIBRARIES)
+find_library(ASPELL_LIBRARIES NAMES aspell aspell-15 libaspell-15 libaspell)
+
+include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(ASPELL DEFAULT_MSG ASPELL_LIBRARIES ASPELL_INCLUDE_DIR ASPELL_EXECUTABLE)
+
+mark_as_advanced(ASPELL_INCLUDE_DIR ASPELL_LIBRARIES ASPELL_EXECUTABLE)

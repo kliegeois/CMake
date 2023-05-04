@@ -1,25 +1,13 @@
-/*=========================================================================
+/* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
+   file Copyright.txt or https://cmake.org/licensing for details.  */
+#pragma once
 
-  Program:   CMake - Cross-Platform Makefile Generator
-  Module:    $RCSfile$
-  Language:  C++
-  Date:      $Date$
-  Version:   $Revision$
-
-  Copyright (c) 2002 Kitware, Inc. All rights reserved.
-  See Copyright.txt or http://www.cmake.org/HTML/Copyright.html for details.
-
-     This software is distributed WITHOUT ANY WARRANTY; without even 
-     the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-     PURPOSE.  See the above copyright notices for more information.
-
-=========================================================================*/
-
-#ifndef cmCPackPackageMakerGenerator_h
-#define cmCPackPackageMakerGenerator_h
-
+#include "cmConfigure.h" // IWYU pragma: keep
 
 #include "cmCPackGenerator.h"
+#include "cmCPackPKGGenerator.h"
+
+class cmCPackComponent;
 
 /** \class cmCPackPackageMakerGenerator
  * \brief A generator for PackageMaker files
@@ -27,28 +15,36 @@
  * http://developer.apple.com/documentation/Darwin
  * /Reference/ManPages/man1/packagemaker.1.html
  */
-class cmCPackPackageMakerGenerator : public cmCPackGenerator
+class cmCPackPackageMakerGenerator : public cmCPackPKGGenerator
 {
 public:
-  cmCPackTypeMacro(cmCPackPackageMakerGenerator, cmCPackGenerator);
+  cmCPackTypeMacro(cmCPackPackageMakerGenerator, cmCPackPKGGenerator);
 
   /**
    * Construct generator
    */
   cmCPackPackageMakerGenerator();
-  virtual ~cmCPackPackageMakerGenerator();
+  ~cmCPackPackageMakerGenerator() override;
+  bool SupportsComponentInstallation() const override;
 
 protected:
-  virtual int InitializeInternal();
-  int CompressFiles(const char* outFileName, const char* toplevel,
-    const std::vector<std::string>& files);
-  virtual const char* GetOutputExtension() { return ".dmg"; }
-  virtual const char* GetOutputPostfix() { return "darwin"; }
+  int InitializeInternal() override;
+  int PackageFiles() override;
+  const char* GetOutputExtension() override { return ".dmg"; }
 
-  bool CopyCreateResourceFile(const char* name);
-  bool CopyResourcePlistFile(const char* name);
+  // Run PackageMaker with the given command line, which will (if
+  // successful) produce the given package file. Returns true if
+  // PackageMaker succeeds, false otherwise.
+  bool RunPackageMaker(const char* command, const char* packageFile);
+
+  // Generate a package in the file packageFile for the given
+  // component.  All of the files within this component are stored in
+  // the directory packageDir. Returns true if successful, false
+  // otherwise.
+  bool GenerateComponentPackage(const char* packageFile,
+                                const char* packageDir,
+                                const cmCPackComponent& component);
 
   double PackageMakerVersion;
+  unsigned int PackageCompatibilityVersion;
 };
-
-#endif
